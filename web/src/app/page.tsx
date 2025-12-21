@@ -123,7 +123,8 @@ export default async function HomePage() {
     aggressivePicks,
     conservativeScores,
     aggressiveScores,
-    regime
+    regime,
+    debugError
   } = await getTodayPicks();
 
   const today = format(new Date(), 'yyyy年MM月dd日 (E)', { locale: ja });
@@ -143,6 +144,7 @@ export default async function HomePage() {
           <li>Regime: {regime?.market_regime || 'null'}</li>
           <li>Supabase URL: {process.env.NEXT_PUBLIC_SUPABASE_URL ? 'SET' : 'NOT SET'}</li>
           <li>Supabase Key: {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'SET' : 'NOT SET'}</li>
+          {debugError && <li className="text-red-600 font-bold">Error: {debugError}</li>}
         </ul>
       </div>
 

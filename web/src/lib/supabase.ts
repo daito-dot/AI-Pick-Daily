@@ -29,6 +29,7 @@ export async function getTodayPicks(): Promise<{
   conservativeScores: StockScore[];
   aggressiveScores: StockScore[];
   regime: MarketRegimeHistory | null;
+  debugError?: string;
 }> {
   try {
     const supabase = getSupabase();
@@ -41,7 +42,19 @@ export async function getTodayPicks(): Promise<{
       .select('*')
       .eq('batch_date', today);
 
-    console.log('[getTodayPicks] daily_picks result:', { allPicks, picksError });
+    if (picksError) {
+      console.error('[getTodayPicks] daily_picks error:', picksError);
+      return {
+        conservativePicks: null,
+        aggressivePicks: null,
+        conservativeScores: [],
+        aggressiveScores: [],
+        regime: null,
+        debugError: `daily_picks: ${picksError.message}`,
+      };
+    }
+
+    console.log('[getTodayPicks] daily_picks result:', allPicks?.length);
 
     const conservativePicks = allPicks?.find(p => p.strategy_mode === 'conservative') || null;
     const aggressivePicks = allPicks?.find(p => p.strategy_mode === 'aggressive') || null;
@@ -53,7 +66,19 @@ export async function getTodayPicks(): Promise<{
       .eq('batch_date', today)
       .order('composite_score', { ascending: false });
 
-    console.log('[getTodayPicks] stock_scores result:', { count: allScores?.length, scoresError });
+    if (scoresError) {
+      console.error('[getTodayPicks] stock_scores error:', scoresError);
+      return {
+        conservativePicks,
+        aggressivePicks,
+        conservativeScores: [],
+        aggressiveScores: [],
+        regime: null,
+        debugError: `stock_scores: ${scoresError.message}`,
+      };
+    }
+
+    console.log('[getTodayPicks] stock_scores result:', allScores?.length);
 
     const conservativeScores = allScores?.filter(s => s.strategy_mode === 'conservative') || [];
     const aggressiveScores = allScores?.filter(s => s.strategy_mode === 'aggressive') || [];
@@ -65,7 +90,10 @@ export async function getTodayPicks(): Promise<{
       .eq('check_date', today)
       .single();
 
-    console.log('[getTodayPicks] market_regime result:', { regime, regimeError });
+    // Note: single() returns error if no rows found, so we don't treat it as fatal
+    if (regimeError && regimeError.code !== 'PGRST116') {
+      console.error('[getTodayPicks] market_regime error:', regimeError);
+    }
 
     return {
       conservativePicks,
@@ -73,6 +101,7 @@ export async function getTodayPicks(): Promise<{
       conservativeScores,
       aggressiveScores,
       regime: regime || null,
+      debugError: undefined,
     };
   } catch (error) {
     console.error('getTodayPicks error:', error);
@@ -82,6 +111,7 @@ export async function getTodayPicks(): Promise<{
       conservativeScores: [],
       aggressiveScores: [],
       regime: null,
+      debugError: `Exception: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
