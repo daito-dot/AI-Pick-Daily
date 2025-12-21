@@ -36,6 +36,15 @@ export async function getTodayPicks(): Promise<{
     const today = new Date().toISOString().split('T')[0];
     console.log('[getTodayPicks] Querying for date:', today);
 
+    // DEBUG: First try to get ALL picks to verify connection works
+    const { data: allPicksNoFilter, error: allPicksError } = await supabase
+      .from('daily_picks')
+      .select('*')
+      .order('batch_date', { ascending: false })
+      .limit(5);
+
+    console.log('[getTodayPicks] ALL daily_picks (no filter):', allPicksNoFilter?.length, allPicksError);
+
     // Get daily picks for both strategies
     const { data: allPicks, error: picksError } = await supabase
       .from('daily_picks')
@@ -51,6 +60,31 @@ export async function getTodayPicks(): Promise<{
         aggressiveScores: [],
         regime: null,
         debugError: `daily_picks: ${picksError.message}`,
+      };
+    }
+
+    // If no data for today but we have other data, show debug info
+    if (allPicks?.length === 0 && allPicksNoFilter && allPicksNoFilter.length > 0) {
+      const latestDate = allPicksNoFilter[0]?.batch_date;
+      return {
+        conservativePicks: null,
+        aggressivePicks: null,
+        conservativeScores: [],
+        aggressiveScores: [],
+        regime: null,
+        debugError: `No data for ${today}. Latest data is from: ${latestDate}. Total records: ${allPicksNoFilter.length}`,
+      };
+    }
+
+    // If no data at all, RLS might be blocking
+    if ((!allPicks || allPicks.length === 0) && (!allPicksNoFilter || allPicksNoFilter.length === 0)) {
+      return {
+        conservativePicks: null,
+        aggressivePicks: null,
+        conservativeScores: [],
+        aggressiveScores: [],
+        regime: null,
+        debugError: `RLS may be blocking: No records returned from daily_picks table`,
       };
     }
 
