@@ -17,16 +17,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Debug: Print environment variables before any imports
-print("=== Environment Variable Debug ===")
-print(f"SUPABASE_URL present: {bool(os.environ.get('SUPABASE_URL'))}")
-print(f"SUPABASE_URL length: {len(os.environ.get('SUPABASE_URL', ''))}")
-print(f"SUPABASE_SERVICE_ROLE_KEY present: {bool(os.environ.get('SUPABASE_SERVICE_ROLE_KEY'))}")
-print(f"SUPABASE_SERVICE_ROLE_KEY length: {len(os.environ.get('SUPABASE_SERVICE_ROLE_KEY', ''))}")
-print(f"FINNHUB_API_KEY present: {bool(os.environ.get('FINNHUB_API_KEY'))}")
-print(f"GEMINI_API_KEY present: {bool(os.environ.get('GEMINI_API_KEY'))}")
-print("=================================")
-
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -75,27 +65,45 @@ def fetch_market_regime_data(finnhub: FinnhubClient) -> dict:
     # Get VIX
     try:
         vix = finnhub.get_vix()
-        logger.info(f"VIX: {vix}")
+        # VIX of 0 means data is unavailable (free tier limitation)
+        if vix == 0:
+            logger.warning("VIX returned 0 (likely free tier limitation), using default 18")
+            vix = 18.0
+        else:
+            logger.info(f"VIX: {vix}")
     except Exception as e:
-        logger.warning(f"Failed to get VIX: {e}, using default 20")
-        vix = 20.0
+        logger.warning(f"Failed to get VIX: {e}, using default 18")
+        vix = 18.0
 
     # Get S&P 500 data
-    sp500 = finnhub.get_sp500()
-    sp500_price = sp500.current_price
-    logger.info(f"S&P 500 (SPY): {sp500_price}")
+    try:
+        sp500 = finnhub.get_sp500()
+        sp500_price = sp500.current_price
+        logger.info(f"S&P 500 (SPY): {sp500_price}")
+    except Exception as e:
+        logger.warning(f"Failed to get S&P 500: {e}, using default")
+        sp500_price = 500.0
 
     # Get historical prices for SMA and volatility
-    candles = finnhub.get_stock_candles(
-        "SPY",
-        resolution="D",
-        from_timestamp=int((datetime.now() - timedelta(days=60)).timestamp()),
-    )
-    prices = candles.get("close", [])
+    try:
+        candles = finnhub.get_stock_candles(
+            "SPY",
+            resolution="D",
+            from_timestamp=int((datetime.now() - timedelta(days=60)).timestamp()),
+        )
+        prices = candles.get("close", [])
+        if not prices:
+            logger.warning("No SPY candle data returned, using defaults")
+    except Exception as e:
+        logger.warning(f"Failed to get SPY candles: {e}, using defaults")
+        prices = []
 
+    # Calculate or use defaults
     sp500_sma20 = calculate_sma(prices, 20) if prices else sp500_price
-    volatility_5d = calculate_volatility(prices, 5) if prices else 0.15
-    volatility_30d = calculate_volatility(prices, 30) if prices else 0.15
+    volatility_5d = calculate_volatility(prices, 5) if prices else 0.12
+    volatility_30d = calculate_volatility(prices, 30) if prices else 0.12
+
+    logger.info(f"Market data: VIX={vix}, SP500={sp500_price}, SMA20={sp500_sma20:.2f}")
 
     return {
         "vix": vix,
@@ -116,14 +124,18 @@ def fetch_stock_data(
         # Get quote
         quote = finnhub.get_quote(symbol)
 
-        # Get historical prices
-        candles = finnhub.get_stock_candles(
-            symbol,
-            resolution="D",
-            from_timestamp=int((datetime.now() - timedelta(days=250)).timestamp()),
-        )
-        prices = candles.get("close", [])
-        volumes = candles.get("volume", [])
+        # Get historical prices (may fail for some symbols on free tier)
+        try:
+            candles = finnhub.get_stock_candles(
+                symbol,
+                resolution="D",
+                from_timestamp=int((datetime.now() - timedelta(days=250)).timestamp()),
+            )
+            prices = candles.get("close", [])
+            volumes = candles.get("volume", [])
+        except Exception as e:
+            logger.warning(f"Failed to get candles for {symbol}: {e}, skipping")
+            return None
 
         if not prices:
             logger.warning(f"No price data for {symbol}")
