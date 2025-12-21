@@ -9,8 +9,19 @@ from typing import Literal
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Debug: Check env vars BEFORE load_dotenv
+print("=== Config Debug: Before load_dotenv ===")
+print(f"SUPABASE_URL: {bool(os.environ.get('SUPABASE_URL'))}")
+print(f"SUPABASE_SERVICE_ROLE_KEY: {bool(os.environ.get('SUPABASE_SERVICE_ROLE_KEY'))}")
+
+# Load environment variables from .env file (does NOT override existing vars)
+load_dotenv(override=False)
+
+# Debug: Check env vars AFTER load_dotenv
+print("=== Config Debug: After load_dotenv ===")
+print(f"SUPABASE_URL: {bool(os.environ.get('SUPABASE_URL'))}")
+print(f"SUPABASE_SERVICE_ROLE_KEY: {bool(os.environ.get('SUPABASE_SERVICE_ROLE_KEY'))}")
+print("========================================")
 
 
 # Strategy mode types

@@ -17,6 +17,16 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Debug: Print environment variables before any imports
+print("=== Environment Variable Debug ===")
+print(f"SUPABASE_URL present: {bool(os.environ.get('SUPABASE_URL'))}")
+print(f"SUPABASE_URL length: {len(os.environ.get('SUPABASE_URL', ''))}")
+print(f"SUPABASE_SERVICE_ROLE_KEY present: {bool(os.environ.get('SUPABASE_SERVICE_ROLE_KEY'))}")
+print(f"SUPABASE_SERVICE_ROLE_KEY length: {len(os.environ.get('SUPABASE_SERVICE_ROLE_KEY', ''))}")
+print(f"FINNHUB_API_KEY present: {bool(os.environ.get('FINNHUB_API_KEY'))}")
+print(f"GEMINI_API_KEY present: {bool(os.environ.get('GEMINI_API_KEY'))}")
+print("=================================")
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
