@@ -141,6 +141,8 @@ export default async function HomePage() {
           <li>Conservative Scores Count: {conservativeScores.length}</li>
           <li>Aggressive Scores Count: {aggressiveScores.length}</li>
           <li>Regime: {regime?.market_regime || 'null'}</li>
+          <li>Supabase URL: {process.env.NEXT_PUBLIC_SUPABASE_URL ? 'SET' : 'NOT SET'}</li>
+          <li>Supabase Key: {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'SET' : 'NOT SET'}</li>
         </ul>
       </div>
 
