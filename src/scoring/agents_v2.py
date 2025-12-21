@@ -357,7 +357,7 @@ class RiskAdjustedAgent:
         # 2. Stock Volatility (30 points max)
         stock_vol_score = 0
         if len(prices) >= 20:
-            returns = np.diff(prices[-20:]) / prices[-21:-1]
+            returns = np.diff(prices[-20:]) / prices[-20:-1]
             daily_vol = np.std(returns) * 100
             annualized_vol = daily_vol * np.sqrt(252)
 
