@@ -5,6 +5,7 @@ export type RiskToleranceType = 'conservative' | 'balanced' | 'aggressive';
 export type PickStatusType = 'generated' | 'published';
 export type PerformanceStatusType = 'win' | 'loss' | 'flat' | 'pending';
 export type AgentNameType = 'trend' | 'momentum' | 'value' | 'sentiment';
+export type StrategyModeType = 'conservative' | 'aggressive';
 
 export interface DailyPick {
   id: string;
@@ -12,6 +13,7 @@ export interface DailyPick {
   symbols: string[];
   pick_count: number;
   market_regime: MarketRegimeType;
+  strategy_mode: StrategyModeType;
   status: PickStatusType;
   created_at: string;
 }
@@ -20,10 +22,20 @@ export interface StockScore {
   id: string;
   batch_date: string;
   symbol: string;
+  strategy_mode: StrategyModeType;
+
+  // V1 scores
   trend_score: number;
   momentum_score: number;
   value_score: number;
   sentiment_score: number;
+
+  // V2 scores
+  momentum_12_1_score: number | null;
+  breakout_score: number | null;
+  catalyst_score: number | null;
+  risk_adjusted_score: number | null;
+
   composite_score: number;
   percentile_rank: number;
   reasoning: string;

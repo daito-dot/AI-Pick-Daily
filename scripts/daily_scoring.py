@@ -30,7 +30,8 @@ from src.data.supabase_client import (
 )
 from src.scoring.market_regime import decide_market_regime, calculate_sma, calculate_volatility
 from src.scoring.agents import StockData
-from src.scoring.composite import run_full_scoring
+from src.scoring.agents_v2 import V2StockData
+from src.scoring.composite_v2 import run_dual_scoring
 
 # Setup logging
 log_dir = Path("logs")
@@ -95,8 +96,12 @@ def fetch_market_regime_data(finnhub: FinnhubClient) -> dict:
     }
 
 
-def fetch_stock_data(finnhub: FinnhubClient, symbol: str) -> StockData | None:
-    """Fetch all data needed to score a stock."""
+def fetch_stock_data(
+    finnhub: FinnhubClient,
+    symbol: str,
+    vix_level: float,
+) -> tuple[StockData, V2StockData] | None:
+    """Fetch all data needed to score a stock for both V1 and V2 strategies."""
     try:
         # Get quote
         quote = finnhub.get_quote(symbol)
@@ -120,7 +125,13 @@ def fetch_stock_data(finnhub: FinnhubClient, symbol: str) -> StockData | None:
         # Get news
         news = finnhub.get_company_news(symbol)
 
-        return StockData(
+        # Calculate gap percentage (for V2)
+        gap_pct = 0.0
+        if quote.previous_close and quote.previous_close > 0:
+            gap_pct = ((quote.open - quote.previous_close) / quote.previous_close) * 100
+
+        # V1 Stock Data
+        v1_data = StockData(
             symbol=symbol,
             prices=prices,
             volumes=volumes,
@@ -134,6 +145,30 @@ def fetch_stock_data(finnhub: FinnhubClient, symbol: str) -> StockData | None:
             news_sentiment=None,  # Would need sentiment API
             sector_avg_pe=25.0,  # Simplified
         )
+
+        # V2 Stock Data (with additional fields)
+        v2_data = V2StockData(
+            symbol=symbol,
+            prices=prices,
+            volumes=volumes,
+            open_price=quote.open,
+            pe_ratio=financials.pe_ratio,
+            pb_ratio=financials.pb_ratio,
+            dividend_yield=financials.dividend_yield,
+            week_52_high=financials.week_52_high,
+            week_52_low=financials.week_52_low,
+            news_count_7d=len(news),
+            news_sentiment=None,
+            sector_avg_pe=25.0,
+            # V2 specific fields
+            vix_level=vix_level,
+            gap_pct=gap_pct,
+            # These would need additional API calls in production
+            earnings_surprise_pct=None,
+            analyst_revision_score=None,
+        )
+
+        return v1_data, v2_data
 
     except Exception as e:
         logger.error(f"Error fetching data for {symbol}: {e}")
@@ -211,14 +246,24 @@ def main():
     # Check if we should skip (crisis mode)
     if market_regime.max_picks == 0:
         logger.warning("Market in CRISIS mode - no recommendations today")
+        # Save empty picks for both strategies
         supabase.save_daily_picks(DailyPick(
             batch_date=today,
             symbols=[],
             pick_count=0,
             market_regime=market_regime.regime.value,
+            strategy_mode="conservative",
             status="published",
         ))
-        logger.info("Saved empty daily picks")
+        supabase.save_daily_picks(DailyPick(
+            batch_date=today,
+            symbols=[],
+            pick_count=0,
+            market_regime=market_regime.regime.value,
+            strategy_mode="aggressive",
+            status="published",
+        ))
+        logger.info("Saved empty daily picks for both strategies")
         return
 
     # 2. Filter candidates
@@ -229,31 +274,44 @@ def main():
 
     # 3. Fetch stock data
     logger.info("Step 3: Fetching stock data...")
-    stocks_data = []
+    v1_stocks_data = []
+    v2_stocks_data = []
     for symbol in candidates:
-        data = fetch_stock_data(finnhub, symbol)
-        if data:
-            stocks_data.append(data)
+        result = fetch_stock_data(finnhub, symbol, regime_data["vix"])
+        if result:
+            v1_data, v2_data = result
+            v1_stocks_data.append(v1_data)
+            v2_stocks_data.append(v2_data)
         # Small delay to avoid rate limiting
         time.sleep(0.5)
 
-    logger.info(f"Successfully fetched data for {len(stocks_data)} stocks")
+    logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
 
-    # 4. Run scoring
-    logger.info("Step 4: Running scoring pipeline...")
-    result = run_full_scoring(stocks_data, market_regime)
+    # 4. Run dual scoring (V1 Conservative + V2 Aggressive)
+    logger.info("Step 4: Running dual scoring pipeline...")
+    dual_result = run_dual_scoring(v1_stocks_data, v2_stocks_data, market_regime)
 
-    logger.info(f"Scored {len(result.scores)} stocks")
-    logger.info(f"Top picks: {result.top_picks}")
+    logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
+    logger.info(f"V1 picks: {dual_result.v1_picks}")
+    logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
+    logger.info(f"V2 picks: {dual_result.v2_picks}")
 
-    # 5. Save results
+    # 5. Save results for both strategies
     logger.info("Step 5: Saving results...")
 
-    # Save stock scores
-    stock_scores = [
+    # Helper to get price for a symbol
+    def get_price(symbol: str) -> float:
+        return next(
+            (d.open_price for d in v1_stocks_data if d.symbol == symbol),
+            0.0,
+        )
+
+    # Save V1 (Conservative) stock scores
+    v1_stock_scores = [
         StockScore(
             batch_date=today,
             symbol=s.symbol,
+            strategy_mode="conservative",
             trend_score=s.trend_score,
             momentum_score=s.momentum_score,
             value_score=s.value_score,
@@ -261,29 +319,67 @@ def main():
             composite_score=s.composite_score,
             percentile_rank=s.percentile_rank,
             reasoning=s.reasoning,
-            price_at_time=next(
-                (d.open_price for d in stocks_data if d.symbol == s.symbol),
-                0.0,
-            ),
+            price_at_time=get_price(s.symbol),
             market_regime_at_time=market_regime.regime.value,
-            cutoff_timestamp=result.cutoff_timestamp.isoformat(),
+            momentum_12_1_score=s.momentum_12_1_score,
+            breakout_score=s.breakout_score,
+            catalyst_score=s.catalyst_score,
+            risk_adjusted_score=s.risk_adjusted_score,
+            cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
         )
-        for s in result.scores
+        for s in dual_result.v1_scores
     ]
-    supabase.save_stock_scores(stock_scores)
+    supabase.save_stock_scores(v1_stock_scores)
 
-    # Save daily picks
+    # Save V2 (Aggressive) stock scores
+    v2_stock_scores = [
+        StockScore(
+            batch_date=today,
+            symbol=s.symbol,
+            strategy_mode="aggressive",
+            trend_score=s.trend_score,
+            momentum_score=s.momentum_score,
+            value_score=s.value_score,
+            sentiment_score=s.sentiment_score,
+            composite_score=s.composite_score,
+            percentile_rank=s.percentile_rank,
+            reasoning=s.reasoning,
+            price_at_time=get_price(s.symbol),
+            market_regime_at_time=market_regime.regime.value,
+            momentum_12_1_score=s.momentum_12_1_score,
+            breakout_score=s.breakout_score,
+            catalyst_score=s.catalyst_score,
+            risk_adjusted_score=s.risk_adjusted_score,
+            cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
+        )
+        for s in dual_result.v2_scores
+    ]
+    supabase.save_stock_scores(v2_stock_scores)
+
+    # Save V1 daily picks
     supabase.save_daily_picks(DailyPick(
         batch_date=today,
-        symbols=result.top_picks,
-        pick_count=len(result.top_picks),
+        symbols=dual_result.v1_picks,
+        pick_count=len(dual_result.v1_picks),
         market_regime=market_regime.regime.value,
+        strategy_mode="conservative",
+        status="published",
+    ))
+
+    # Save V2 daily picks
+    supabase.save_daily_picks(DailyPick(
+        batch_date=today,
+        symbols=dual_result.v2_picks,
+        pick_count=len(dual_result.v2_picks),
+        market_regime=market_regime.regime.value,
+        strategy_mode="aggressive",
         status="published",
     ))
 
     logger.info("=" * 50)
     logger.info("Daily scoring batch completed successfully")
-    logger.info(f"Picks: {result.top_picks}")
+    logger.info(f"V1 Conservative Picks: {dual_result.v1_picks}")
+    logger.info(f"V2 Aggressive Picks: {dual_result.v2_picks}")
     logger.info("=" * 50)
 
 

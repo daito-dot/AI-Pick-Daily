@@ -24,6 +24,7 @@ class DailyPick:
     symbols: list[str]
     pick_count: int
     market_regime: str
+    strategy_mode: str = "conservative"  # 'conservative' or 'aggressive'
     status: str = "generated"
 
 
@@ -32,6 +33,7 @@ class StockScore:
     """Stock scoring record."""
     batch_date: str
     symbol: str
+    strategy_mode: str  # 'conservative' or 'aggressive'
     trend_score: int
     momentum_score: int
     value_score: int
@@ -41,6 +43,11 @@ class StockScore:
     reasoning: str
     price_at_time: float
     market_regime_at_time: str
+    # V2 scores
+    momentum_12_1_score: int | None = None
+    breakout_score: int | None = None
+    catalyst_score: int | None = None
+    risk_adjusted_score: int | None = None
     earnings_date: str | None = None
     cutoff_timestamp: str | None = None
 
@@ -86,12 +93,13 @@ class SupabaseClient:
             "symbols": picks.symbols,
             "pick_count": picks.pick_count,
             "market_regime": picks.market_regime,
+            "strategy_mode": picks.strategy_mode,
             "status": picks.status,
         }
 
         result = self._client.table("daily_picks").upsert(
             data,
-            on_conflict="batch_date",
+            on_conflict="batch_date,strategy_mode",
         ).execute()
 
         return result.data[0] if result.data else {}
@@ -144,6 +152,7 @@ class SupabaseClient:
             {
                 "batch_date": s.batch_date,
                 "symbol": s.symbol,
+                "strategy_mode": s.strategy_mode,
                 "trend_score": s.trend_score,
                 "momentum_score": s.momentum_score,
                 "value_score": s.value_score,
@@ -153,6 +162,11 @@ class SupabaseClient:
                 "reasoning": s.reasoning,
                 "price_at_time": s.price_at_time,
                 "market_regime_at_time": s.market_regime_at_time,
+                # V2 scores
+                "momentum_12_1_score": s.momentum_12_1_score,
+                "breakout_score": s.breakout_score,
+                "catalyst_score": s.catalyst_score,
+                "risk_adjusted_score": s.risk_adjusted_score,
                 "earnings_date": s.earnings_date,
                 "cutoff_timestamp": s.cutoff_timestamp,
             }
@@ -161,7 +175,7 @@ class SupabaseClient:
 
         result = self._client.table("stock_scores").upsert(
             data,
-            on_conflict="batch_date,symbol",
+            on_conflict="batch_date,symbol,strategy_mode",
         ).execute()
 
         return result.data or []

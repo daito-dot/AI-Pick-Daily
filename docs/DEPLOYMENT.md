@@ -48,7 +48,18 @@
 4. **Run** をクリック
 5. 成功メッセージを確認
 
-### 2.3 接続情報の取得
+### 2.3 デュアル戦略モード対応（V1/V2）
+
+1. **SQL Editor** で新しいクエリを作成
+2. `supabase/migrations/002_add_strategy_mode.sql` の内容を貼り付け
+3. **Run** をクリック
+4. 以下が追加されたことを確認:
+   - `strategy_mode` カラム（daily_picks, stock_scores, performance_log）
+   - V2スコアカラム（momentum_12_1_score, breakout_score, catalyst_score, risk_adjusted_score）
+   - `strategy_comparison` ビュー
+   - `cumulative_performance` ビュー
+
+### 2.4 接続情報の取得
 
 1. 左メニューから **Project Settings** → **API** を開く
 2. 以下をメモ:
@@ -102,6 +113,7 @@
 | `LLM_PROVIDER` | `gemini` | LLMプロバイダー |
 | `SCORING_MODEL` | `gemini-2.5-flash-lite` | スコアリング用モデル |
 | `ANALYSIS_MODEL` | `gemini-3-flash` | 分析用モデル |
+| `STRATEGY_MODE` | `both` | 戦略モード（`conservative`, `aggressive`, `both`） |
 
 ---
 
@@ -155,14 +167,20 @@
 1. Supabase Dashboard → **Table Editor**
 2. 以下のテーブルにデータが入っていることを確認:
    - `market_regime_history`
-   - `stock_scores`
-   - `daily_picks`
+   - `stock_scores`（`strategy_mode` = 'conservative' と 'aggressive' の両方）
+   - `daily_picks`（`strategy_mode` = 'conservative' と 'aggressive' の両方）
+
+3. **SQL Editor** で戦略比較ビューを確認:
+   ```sql
+   SELECT * FROM strategy_comparison ORDER BY pick_date DESC LIMIT 10;
+   ```
 
 ### 6.3 フロントエンド確認
 
 1. Vercelの本番URLにアクセス
-2. 本日のピックが表示されることを確認
-3. 履歴・パフォーマンスページが動作することを確認
+2. V1 (Conservative) と V2 (Aggressive) が並んで表示されることを確認
+3. 各戦略のピック銘柄とスコアが正しく表示されることを確認
+4. 「全スコア比較」テーブルでV1/V2の差分が表示されることを確認
 
 ---
 

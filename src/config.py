@@ -4,13 +4,48 @@ AI Pick Daily - Configuration Management
 Centralized configuration using environment variables.
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+# Strategy mode types
+StrategyMode = Literal["conservative", "aggressive", "both"]
+
+
+@dataclass
+class StrategyConfig:
+    """Strategy-related configuration."""
+    mode: StrategyMode = "both"  # Run both strategies by default
+
+    # V1 Conservative weights
+    v1_weights: dict = field(default_factory=lambda: {
+        "trend": 0.35,
+        "momentum": 0.35,
+        "value": 0.20,
+        "sentiment": 0.10,
+    })
+
+    # V2 Aggressive weights
+    v2_weights: dict = field(default_factory=lambda: {
+        "momentum_12_1": 0.40,
+        "breakout": 0.25,
+        "catalyst": 0.20,
+        "risk_adjusted": 0.15,
+    })
+
+    # V1 settings
+    v1_max_picks: int = 5
+    v1_min_score: int = 60
+
+    # V2 settings
+    v2_max_picks: int = 3
+    v2_min_score: int = 75
+    v2_trailing_stop_pct: float = 0.08  # 8%
 
 
 @dataclass
@@ -44,11 +79,16 @@ class Config:
     llm: LLMConfig
     finnhub: FinnhubConfig
     supabase: SupabaseConfig
+    strategy: StrategyConfig
     debug: bool = False
 
 
 def load_config() -> Config:
     """Load configuration from environment variables."""
+    strategy_mode = os.getenv("STRATEGY_MODE", "both")
+    if strategy_mode not in ("conservative", "aggressive", "both"):
+        strategy_mode = "both"
+
     return Config(
         llm=LLMConfig(
             provider=os.getenv("LLM_PROVIDER", "gemini"),  # type: ignore
@@ -64,6 +104,9 @@ def load_config() -> Config:
             url=os.getenv("SUPABASE_URL"),
             anon_key=os.getenv("SUPABASE_ANON_KEY"),
             service_role_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+        ),
+        strategy=StrategyConfig(
+            mode=strategy_mode,  # type: ignore
         ),
         debug=os.getenv("DEBUG", "false").lower() == "true",
     )
