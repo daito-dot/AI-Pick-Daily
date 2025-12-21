@@ -3,12 +3,17 @@
 Daily Scoring Script
 
 Morning batch job that:
-1. Fetches market data from Finnhub
+1. Fetches market data from Finnhub (with yfinance fallback)
 2. Determines market regime (VIX, S&P 500)
 3. Filters candidates (liquidity, earnings)
 4. Scores stocks with 4 agents
 5. Selects top picks
 6. Saves to Supabase
+
+Data Source Strategy:
+- Primary: Finnhub API (higher quality, but free tier has limitations)
+- Fallback: yfinance (free, but can be blocked)
+- If both fail: Batch fails with clear error (no fake data)
 """
 import logging
 import os
@@ -22,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
 from src.data.finnhub_client import FinnhubClient
+from src.data.yfinance_client import get_yfinance_client, YFinanceClient
 from src.data.supabase_client import (
     SupabaseClient,
     DailyPick,
@@ -32,6 +38,11 @@ from src.scoring.market_regime import decide_market_regime, calculate_sma, calcu
 from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
 from src.scoring.composite_v2 import run_dual_scoring
+
+
+class DataFetchError(Exception):
+    """Raised when data cannot be fetched from any source."""
+    pass
 
 # Setup logging
 log_dir = Path("logs")
@@ -58,33 +69,73 @@ SP500_TOP_SYMBOLS = [
 ]
 
 
-def fetch_market_regime_data(finnhub: FinnhubClient) -> dict:
-    """Fetch data needed for market regime determination."""
+def fetch_market_regime_data(finnhub: FinnhubClient, yf_client: YFinanceClient) -> dict:
+    """
+    Fetch data needed for market regime determination.
+
+    Uses Finnhub as primary source, yfinance as fallback.
+    Raises DataFetchError if critical data cannot be obtained from any source.
+    """
     logger.info("Fetching market regime data...")
 
-    # Get VIX
+    vix = None
+    sp500_price = None
+    prices = []
+
+    # === Get VIX ===
+    # Try Finnhub first
     try:
         vix = finnhub.get_vix()
-        # VIX of 0 means data is unavailable (free tier limitation)
-        if vix == 0:
-            logger.warning("VIX returned 0 (likely free tier limitation), using default 18")
-            vix = 18.0
+        if vix == 0 or vix is None:
+            logger.warning("Finnhub VIX returned 0/None, trying yfinance...")
+            vix = None
         else:
-            logger.info(f"VIX: {vix}")
+            logger.info(f"VIX from Finnhub: {vix}")
     except Exception as e:
-        logger.warning(f"Failed to get VIX: {e}, using default 18")
-        vix = 18.0
+        logger.warning(f"Finnhub VIX failed: {e}")
 
-    # Get S&P 500 data
+    # Fallback to yfinance
+    if vix is None:
+        try:
+            vix = yf_client.get_vix()
+            if vix and vix > 0:
+                logger.info(f"VIX from yfinance: {vix}")
+            else:
+                vix = None
+        except Exception as e:
+            logger.warning(f"yfinance VIX failed: {e}")
+
+    if vix is None:
+        raise DataFetchError("Failed to get VIX from both Finnhub and yfinance")
+
+    # === Get S&P 500 price ===
+    # Try Finnhub first
     try:
         sp500 = finnhub.get_sp500()
         sp500_price = sp500.current_price
-        logger.info(f"S&P 500 (SPY): {sp500_price}")
+        if sp500_price and sp500_price > 0:
+            logger.info(f"S&P 500 (SPY) from Finnhub: {sp500_price}")
+        else:
+            sp500_price = None
     except Exception as e:
-        logger.warning(f"Failed to get S&P 500: {e}, using default")
-        sp500_price = 500.0
+        logger.warning(f"Finnhub S&P 500 failed: {e}")
 
-    # Get historical prices for SMA and volatility
+    # Fallback to yfinance
+    if sp500_price is None:
+        try:
+            sp500_price = yf_client.get_sp500_price()
+            if sp500_price and sp500_price > 0:
+                logger.info(f"S&P 500 (SPY) from yfinance: {sp500_price}")
+            else:
+                sp500_price = None
+        except Exception as e:
+            logger.warning(f"yfinance S&P 500 failed: {e}")
+
+    if sp500_price is None:
+        raise DataFetchError("Failed to get S&P 500 price from both Finnhub and yfinance")
+
+    # === Get historical prices for SMA and volatility ===
+    # Try Finnhub first
     try:
         candles = finnhub.get_stock_candles(
             "SPY",
@@ -92,18 +143,30 @@ def fetch_market_regime_data(finnhub: FinnhubClient) -> dict:
             from_timestamp=int((datetime.now() - timedelta(days=60)).timestamp()),
         )
         prices = candles.get("close", [])
-        if not prices:
-            logger.warning("No SPY candle data returned, using defaults")
+        if prices:
+            logger.info(f"SPY candles from Finnhub: {len(prices)} days")
     except Exception as e:
-        logger.warning(f"Failed to get SPY candles: {e}, using defaults")
-        prices = []
+        logger.warning(f"Finnhub SPY candles failed: {e}")
 
-    # Calculate or use defaults
-    sp500_sma20 = calculate_sma(prices, 20) if prices else sp500_price
-    volatility_5d = calculate_volatility(prices, 5) if prices else 0.12
-    volatility_30d = calculate_volatility(prices, 30) if prices else 0.12
+    # Fallback to yfinance
+    if not prices:
+        try:
+            yf_candles = yf_client.get_candles("SPY", period="3mo", interval="1d")
+            if yf_candles and yf_candles.closes:
+                prices = yf_candles.closes
+                logger.info(f"SPY candles from yfinance: {len(prices)} days")
+        except Exception as e:
+            logger.warning(f"yfinance SPY candles failed: {e}")
 
-    logger.info(f"Market data: VIX={vix}, SP500={sp500_price}, SMA20={sp500_sma20:.2f}")
+    if not prices:
+        raise DataFetchError("Failed to get SPY historical data from both Finnhub and yfinance")
+
+    # Calculate metrics
+    sp500_sma20 = calculate_sma(prices, 20)
+    volatility_5d = calculate_volatility(prices, 5)
+    volatility_30d = calculate_volatility(prices, 30)
+
+    logger.info(f"Market data: VIX={vix:.2f}, SP500={sp500_price:.2f}, SMA20={sp500_sma20:.2f}")
 
     return {
         "vix": vix,
@@ -116,85 +179,154 @@ def fetch_market_regime_data(finnhub: FinnhubClient) -> dict:
 
 def fetch_stock_data(
     finnhub: FinnhubClient,
+    yf_client: YFinanceClient,
     symbol: str,
     vix_level: float,
 ) -> tuple[StockData, V2StockData] | None:
-    """Fetch all data needed to score a stock for both V1 and V2 strategies."""
+    """
+    Fetch all data needed to score a stock for both V1 and V2 strategies.
+
+    Uses Finnhub as primary source, yfinance as fallback.
+    Returns None if data cannot be obtained from any source.
+    """
+    prices = []
+    volumes = []
+    open_price = 0.0
+    previous_close = 0.0
+    pe_ratio = None
+    pb_ratio = None
+    dividend_yield = None
+    week_52_high = None
+    week_52_low = None
+    news_count = 0
+
+    # === Get historical prices ===
+    # Try Finnhub first
     try:
-        # Get quote
-        quote = finnhub.get_quote(symbol)
-
-        # Get historical prices (may fail for some symbols on free tier)
-        try:
-            candles = finnhub.get_stock_candles(
-                symbol,
-                resolution="D",
-                from_timestamp=int((datetime.now() - timedelta(days=250)).timestamp()),
-            )
-            prices = candles.get("close", [])
-            volumes = candles.get("volume", [])
-        except Exception as e:
-            logger.warning(f"Failed to get candles for {symbol}: {e}, skipping")
-            return None
-
-        if not prices:
-            logger.warning(f"No price data for {symbol}")
-            return None
-
-        # Get financials
-        financials = finnhub.get_basic_financials(symbol)
-
-        # Get news
-        news = finnhub.get_company_news(symbol)
-
-        # Calculate gap percentage (for V2)
-        gap_pct = 0.0
-        if quote.previous_close and quote.previous_close > 0:
-            gap_pct = ((quote.open - quote.previous_close) / quote.previous_close) * 100
-
-        # V1 Stock Data
-        v1_data = StockData(
-            symbol=symbol,
-            prices=prices,
-            volumes=volumes,
-            open_price=quote.open,
-            pe_ratio=financials.pe_ratio,
-            pb_ratio=financials.pb_ratio,
-            dividend_yield=financials.dividend_yield,
-            week_52_high=financials.week_52_high,
-            week_52_low=financials.week_52_low,
-            news_count_7d=len(news),
-            news_sentiment=None,  # Would need sentiment API
-            sector_avg_pe=25.0,  # Simplified
+        candles = finnhub.get_stock_candles(
+            symbol,
+            resolution="D",
+            from_timestamp=int((datetime.now() - timedelta(days=250)).timestamp()),
         )
-
-        # V2 Stock Data (with additional fields)
-        v2_data = V2StockData(
-            symbol=symbol,
-            prices=prices,
-            volumes=volumes,
-            open_price=quote.open,
-            pe_ratio=financials.pe_ratio,
-            pb_ratio=financials.pb_ratio,
-            dividend_yield=financials.dividend_yield,
-            week_52_high=financials.week_52_high,
-            week_52_low=financials.week_52_low,
-            news_count_7d=len(news),
-            news_sentiment=None,
-            sector_avg_pe=25.0,
-            # V2 specific fields
-            vix_level=vix_level,
-            gap_pct=gap_pct,
-            # These would need additional API calls in production
-            earnings_surprise_pct=None,
-            analyst_revision_score=None,
-        )
-
-        return v1_data, v2_data
-
+        prices = candles.get("close", [])
+        volumes = candles.get("volume", [])
+        if prices:
+            logger.debug(f"{symbol}: candles from Finnhub ({len(prices)} days)")
     except Exception as e:
-        logger.error(f"Error fetching data for {symbol}: {e}")
+        logger.debug(f"{symbol}: Finnhub candles failed: {e}")
+
+    # Fallback to yfinance
+    if not prices:
+        try:
+            yf_candles = yf_client.get_candles(symbol, period="1y", interval="1d")
+            if yf_candles and yf_candles.closes:
+                prices = yf_candles.closes
+                volumes = yf_candles.volumes
+                logger.debug(f"{symbol}: candles from yfinance ({len(prices)} days)")
+        except Exception as e:
+            logger.debug(f"{symbol}: yfinance candles failed: {e}")
+
+    if not prices:
+        logger.warning(f"{symbol}: No price data from either source, skipping")
         return None
+
+    # === Get quote ===
+    # Try Finnhub first
+    try:
+        quote = finnhub.get_quote(symbol)
+        open_price = quote.open
+        previous_close = quote.previous_close
+    except Exception as e:
+        logger.debug(f"{symbol}: Finnhub quote failed: {e}")
+
+    # Fallback to yfinance
+    if open_price == 0:
+        try:
+            yf_quote = yf_client.get_quote(symbol)
+            if yf_quote:
+                open_price = yf_quote.open_price
+                previous_close = yf_quote.previous_close
+        except Exception as e:
+            logger.debug(f"{symbol}: yfinance quote failed: {e}")
+
+    # Use last close price as fallback for open
+    if open_price == 0 and prices:
+        open_price = prices[-1]
+
+    # === Get financials ===
+    # Try Finnhub first
+    try:
+        financials = finnhub.get_basic_financials(symbol)
+        pe_ratio = financials.pe_ratio
+        pb_ratio = financials.pb_ratio
+        dividend_yield = financials.dividend_yield
+        week_52_high = financials.week_52_high
+        week_52_low = financials.week_52_low
+    except Exception as e:
+        logger.debug(f"{symbol}: Finnhub financials failed: {e}")
+
+    # Fallback to yfinance
+    if pe_ratio is None:
+        try:
+            yf_financials = yf_client.get_basic_financials(symbol)
+            if yf_financials:
+                pe_ratio = yf_financials.get("pe_ratio")
+                pb_ratio = yf_financials.get("pb_ratio")
+                dividend_yield = yf_financials.get("dividend_yield")
+                week_52_high = yf_financials.get("week_52_high")
+                week_52_low = yf_financials.get("week_52_low")
+        except Exception as e:
+            logger.debug(f"{symbol}: yfinance financials failed: {e}")
+
+    # === Get news count (Finnhub only) ===
+    try:
+        news = finnhub.get_company_news(symbol)
+        news_count = len(news)
+    except Exception:
+        news_count = 0
+
+    # Calculate gap percentage (for V2)
+    gap_pct = 0.0
+    if previous_close and previous_close > 0:
+        gap_pct = ((open_price - previous_close) / previous_close) * 100
+
+    # V1 Stock Data
+    v1_data = StockData(
+        symbol=symbol,
+        prices=prices,
+        volumes=volumes,
+        open_price=open_price,
+        pe_ratio=pe_ratio,
+        pb_ratio=pb_ratio,
+        dividend_yield=dividend_yield,
+        week_52_high=week_52_high,
+        week_52_low=week_52_low,
+        news_count_7d=news_count,
+        news_sentiment=None,
+        sector_avg_pe=25.0,
+    )
+
+    # V2 Stock Data
+    v2_data = V2StockData(
+        symbol=symbol,
+        prices=prices,
+        volumes=volumes,
+        open_price=open_price,
+        pe_ratio=pe_ratio,
+        pb_ratio=pb_ratio,
+        dividend_yield=dividend_yield,
+        week_52_high=week_52_high,
+        week_52_low=week_52_low,
+        news_count_7d=news_count,
+        news_sentiment=None,
+        sector_avg_pe=25.0,
+        vix_level=vix_level,
+        gap_pct=gap_pct,
+        earnings_surprise_pct=None,
+        analyst_revision_score=None,
+    )
+
+    return v1_data, v2_data
 
 
 def filter_earnings(
@@ -233,6 +365,7 @@ def main():
     # Initialize clients
     try:
         finnhub = FinnhubClient()
+        yf_client = get_yfinance_client()
         supabase = SupabaseClient()
     except Exception as e:
         logger.error(f"Failed to initialize clients: {e}")
@@ -240,7 +373,12 @@ def main():
 
     # 1. Determine market regime
     logger.info("Step 1: Determining market regime...")
-    regime_data = fetch_market_regime_data(finnhub)
+    try:
+        regime_data = fetch_market_regime_data(finnhub, yf_client)
+    except DataFetchError as e:
+        logger.error(f"FATAL: Cannot fetch market regime data: {e}")
+        logger.error("Batch failed - no data sources available")
+        sys.exit(1)
 
     market_regime = decide_market_regime(
         vix=regime_data["vix"],
@@ -298,16 +436,29 @@ def main():
     logger.info("Step 3: Fetching stock data...")
     v1_stocks_data = []
     v2_stocks_data = []
+    failed_symbols = []
+
     for symbol in candidates:
-        result = fetch_stock_data(finnhub, symbol, regime_data["vix"])
+        result = fetch_stock_data(finnhub, yf_client, symbol, regime_data["vix"])
         if result:
             v1_data, v2_data = result
             v1_stocks_data.append(v1_data)
             v2_stocks_data.append(v2_data)
+        else:
+            failed_symbols.append(symbol)
         # Small delay to avoid rate limiting
         time.sleep(0.5)
 
     logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
+    if failed_symbols:
+        logger.warning(f"Failed to fetch data for {len(failed_symbols)} symbols: {failed_symbols[:10]}...")
+
+    # Ensure we have enough data to make recommendations
+    MIN_STOCKS_REQUIRED = 10
+    if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
+        logger.error(f"FATAL: Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)")
+        logger.error("Batch failed - insufficient data for reliable recommendations")
+        sys.exit(1)
 
     # 4. Run dual scoring (V1 Conservative + V2 Aggressive)
     logger.info("Step 4: Running dual scoring pipeline...")
