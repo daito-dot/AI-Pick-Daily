@@ -127,9 +127,23 @@ export default async function HomePage() {
   } = await getTodayPicks();
 
   const today = format(new Date(), 'yyyy年MM月dd日 (E)', { locale: ja });
+  const queryDate = new Date().toISOString().split('T')[0];
 
   return (
     <div className="space-y-8">
+      {/* Debug Info - Remove after testing */}
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm">
+        <h4 className="font-bold text-yellow-800 mb-2">Debug Info</h4>
+        <ul className="text-yellow-700 space-y-1">
+          <li>Query Date (UTC): {queryDate}</li>
+          <li>Conservative Picks: {conservativePicks?.symbols?.join(', ') || 'null'}</li>
+          <li>Aggressive Picks: {aggressivePicks?.symbols?.join(', ') || 'null'}</li>
+          <li>Conservative Scores Count: {conservativeScores.length}</li>
+          <li>Aggressive Scores Count: {aggressiveScores.length}</li>
+          <li>Regime: {regime?.market_regime || 'null'}</li>
+        </ul>
+      </div>
+
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>

@@ -33,32 +33,39 @@ export async function getTodayPicks(): Promise<{
   try {
     const supabase = getSupabase();
     const today = new Date().toISOString().split('T')[0];
+    console.log('[getTodayPicks] Querying for date:', today);
 
     // Get daily picks for both strategies
-    const { data: allPicks } = await supabase
+    const { data: allPicks, error: picksError } = await supabase
       .from('daily_picks')
       .select('*')
       .eq('batch_date', today);
+
+    console.log('[getTodayPicks] daily_picks result:', { allPicks, picksError });
 
     const conservativePicks = allPicks?.find(p => p.strategy_mode === 'conservative') || null;
     const aggressivePicks = allPicks?.find(p => p.strategy_mode === 'aggressive') || null;
 
     // Get stock scores for today (both strategies)
-    const { data: allScores } = await supabase
+    const { data: allScores, error: scoresError } = await supabase
       .from('stock_scores')
       .select('*')
       .eq('batch_date', today)
       .order('composite_score', { ascending: false });
 
+    console.log('[getTodayPicks] stock_scores result:', { count: allScores?.length, scoresError });
+
     const conservativeScores = allScores?.filter(s => s.strategy_mode === 'conservative') || [];
     const aggressiveScores = allScores?.filter(s => s.strategy_mode === 'aggressive') || [];
 
     // Get market regime
-    const { data: regime } = await supabase
+    const { data: regime, error: regimeError } = await supabase
       .from('market_regime_history')
       .select('*')
       .eq('check_date', today)
       .single();
+
+    console.log('[getTodayPicks] market_regime result:', { regime, regimeError });
 
     return {
       conservativePicks,
