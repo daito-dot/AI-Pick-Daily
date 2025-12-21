@@ -36,6 +36,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify environment variables
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          echo "Checking environment variables..."
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "ERROR: SUPABASE_URL is not set or empty"
+            exit 1
+          else
+            echo "SUPABASE_URL is set (length: ${#SUPABASE_URL})"
+          fi
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "ERROR: SUPABASE_SERVICE_ROLE_KEY is not set or empty"
+            exit 1
+          else
+            echo "SUPABASE_SERVICE_ROLE_KEY is set (length: ${#SUPABASE_SERVICE_ROLE_KEY})"
+          fi
+          if [ -z "$FINNHUB_API_KEY" ]; then
+            echo "WARNING: FINNHUB_API_KEY is not set"
+          else
+            echo "FINNHUB_API_KEY is set (length: ${#FINNHUB_API_KEY})"
+          fi
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "WARNING: GEMINI_API_KEY is not set"
+          else
+            echo "GEMINI_API_KEY is set (length: ${#GEMINI_API_KEY})"
+          fi
+          echo "All required environment variables verified."
+
       - name: Run morning scoring
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
