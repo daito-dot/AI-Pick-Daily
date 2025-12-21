@@ -257,3 +257,87 @@ export async function getMarketRegimeHistory(days: number = 30): Promise<MarketR
     return [];
   }
 }
+
+/**
+ * Fetch missed opportunities (stocks not picked but performed well)
+ */
+export async function getMissedOpportunities(days: number = 30, minReturn: number = 3.0): Promise<StockScore[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data } = await supabase
+      .from('stock_scores')
+      .select('*')
+      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .eq('was_picked', false)
+      .gte('return_5d', minReturn)
+      .order('return_5d', { ascending: false })
+      .limit(20);
+
+    return data || [];
+  } catch (error) {
+    console.error('getMissedOpportunities error:', error);
+    return [];
+  }
+}
+
+/**
+ * Get performance comparison stats (picked vs not picked)
+ */
+export async function getPerformanceComparison(days: number = 30): Promise<{
+  pickedCount: number;
+  pickedAvgReturn: number;
+  notPickedCount: number;
+  notPickedAvgReturn: number;
+  missedOpportunities: number;
+}> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data } = await supabase
+      .from('stock_scores')
+      .select('was_picked, return_5d')
+      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .not('return_5d', 'is', null);
+
+    if (!data || data.length === 0) {
+      return {
+        pickedCount: 0,
+        pickedAvgReturn: 0,
+        notPickedCount: 0,
+        notPickedAvgReturn: 0,
+        missedOpportunities: 0,
+      };
+    }
+
+    const picked = data.filter(d => d.was_picked);
+    const notPicked = data.filter(d => !d.was_picked);
+
+    const avgReturn = (arr: typeof data) => {
+      if (arr.length === 0) return 0;
+      const sum = arr.reduce((acc, d) => acc + (d.return_5d || 0), 0);
+      return sum / arr.length;
+    };
+
+    return {
+      pickedCount: picked.length,
+      pickedAvgReturn: avgReturn(picked),
+      notPickedCount: notPicked.length,
+      notPickedAvgReturn: avgReturn(notPicked),
+      missedOpportunities: notPicked.filter(d => (d.return_5d || 0) >= 3).length,
+    };
+  } catch (error) {
+    console.error('getPerformanceComparison error:', error);
+    return {
+      pickedCount: 0,
+      pickedAvgReturn: 0,
+      notPickedCount: 0,
+      notPickedAvgReturn: 0,
+      missedOpportunities: 0,
+    };
+  }
+}

@@ -42,6 +42,14 @@ export interface StockScore {
   price_at_time: number;
   market_regime_at_time: MarketRegimeType;
   created_at: string;
+
+  // Return tracking (filled by daily_review)
+  return_1d: number | null;
+  return_5d: number | null;
+  price_1d: number | null;
+  price_5d: number | null;
+  was_picked: boolean;
+  reviewed_at: string | null;
 }
 
 export interface MarketRegimeHistory {

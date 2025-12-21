@@ -325,6 +325,192 @@ class SupabaseClient:
 
         return result.data or []
 
+    # ============ Return Tracking ============
+
+    def get_scores_for_review(
+        self,
+        batch_date: str,
+        strategy_mode: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Get all stock scores for a date that need return calculation.
+
+        Args:
+            batch_date: Date in YYYY-MM-DD format
+            strategy_mode: Optional strategy filter
+
+        Returns:
+            List of stock score records
+        """
+        query = self._client.table("stock_scores").select("*").eq(
+            "batch_date", batch_date
+        )
+
+        if strategy_mode:
+            query = query.eq("strategy_mode", strategy_mode)
+
+        result = query.order("composite_score", desc=True).execute()
+        return result.data or []
+
+    def update_stock_returns(
+        self,
+        batch_date: str,
+        symbol: str,
+        strategy_mode: str,
+        return_1d: float | None = None,
+        return_5d: float | None = None,
+        price_1d: float | None = None,
+        price_5d: float | None = None,
+        was_picked: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Update return data for a scored stock.
+
+        Args:
+            batch_date: Original score date
+            symbol: Stock symbol
+            strategy_mode: Strategy mode
+            return_1d: 1-day return percentage
+            return_5d: 5-day return percentage
+            price_1d: Price at 1-day review
+            price_5d: Price at 5-day review
+            was_picked: Whether this was a picked stock
+
+        Returns:
+            Updated record
+        """
+        update_data: dict[str, Any] = {
+            "reviewed_at": datetime.utcnow().isoformat(),
+        }
+
+        if return_1d is not None:
+            update_data["return_1d"] = round(return_1d, 4)
+        if return_5d is not None:
+            update_data["return_5d"] = round(return_5d, 4)
+        if price_1d is not None:
+            update_data["price_1d"] = round(price_1d, 4)
+        if price_5d is not None:
+            update_data["price_5d"] = round(price_5d, 4)
+        if was_picked:
+            update_data["was_picked"] = was_picked
+
+        result = self._client.table("stock_scores").update(
+            update_data
+        ).eq(
+            "batch_date", batch_date
+        ).eq(
+            "symbol", symbol
+        ).eq(
+            "strategy_mode", strategy_mode
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def bulk_update_returns(
+        self,
+        updates: list[dict[str, Any]],
+    ) -> int:
+        """
+        Bulk update returns for multiple stocks.
+
+        Args:
+            updates: List of dicts with batch_date, symbol, strategy_mode, and return data
+
+        Returns:
+            Number of records updated
+        """
+        updated = 0
+        for u in updates:
+            self.update_stock_returns(
+                batch_date=u["batch_date"],
+                symbol=u["symbol"],
+                strategy_mode=u["strategy_mode"],
+                return_1d=u.get("return_1d"),
+                return_5d=u.get("return_5d"),
+                price_1d=u.get("price_1d"),
+                price_5d=u.get("price_5d"),
+                was_picked=u.get("was_picked", False),
+            )
+            updated += 1
+        return updated
+
+    def get_missed_opportunities(
+        self,
+        batch_date: str,
+        min_return: float = 3.0,
+        strategy_mode: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Get stocks that weren't picked but performed well.
+
+        Args:
+            batch_date: Date to check
+            min_return: Minimum return percentage to consider
+            strategy_mode: Optional strategy filter
+
+        Returns:
+            List of missed opportunity records
+        """
+        query = self._client.table("stock_scores").select("*").eq(
+            "batch_date", batch_date
+        ).eq(
+            "was_picked", False
+        ).gte(
+            "return_5d", min_return
+        )
+
+        if strategy_mode:
+            query = query.eq("strategy_mode", strategy_mode)
+
+        result = query.order("return_5d", desc=True).execute()
+        return result.data or []
+
+    def get_performance_summary(
+        self,
+        days: int = 30,
+        strategy_mode: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get summary statistics for picked vs non-picked stocks.
+
+        Args:
+            days: Number of days to analyze
+            strategy_mode: Optional strategy filter
+
+        Returns:
+            Summary statistics
+        """
+        # Get all reviewed scores
+        query = self._client.table("stock_scores").select(
+            "was_picked, return_5d, composite_score"
+        ).not_.is_("return_5d", "null")
+
+        if strategy_mode:
+            query = query.eq("strategy_mode", strategy_mode)
+
+        result = query.execute()
+        data = result.data or []
+
+        if not data:
+            return {"error": "No reviewed data"}
+
+        picked = [d for d in data if d.get("was_picked")]
+        not_picked = [d for d in data if not d.get("was_picked")]
+
+        def avg(lst: list, key: str) -> float:
+            vals = [d[key] for d in lst if d.get(key) is not None]
+            return sum(vals) / len(vals) if vals else 0
+
+        return {
+            "picked_count": len(picked),
+            "picked_avg_return": avg(picked, "return_5d"),
+            "picked_avg_score": avg(picked, "composite_score"),
+            "not_picked_count": len(not_picked),
+            "not_picked_avg_return": avg(not_picked, "return_5d"),
+            "not_picked_avg_score": avg(not_picked, "composite_score"),
+            "missed_opportunities": len([d for d in not_picked if d.get("return_5d", 0) > 3]),
+        }
+
     # ============ News Archive ============
 
     def save_news(self, news_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
