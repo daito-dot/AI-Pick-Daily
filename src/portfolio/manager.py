@@ -8,6 +8,7 @@ Manages virtual portfolio for paper trading simulation:
 4. Updates daily portfolio snapshots
 """
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -24,6 +25,7 @@ MAX_POSITIONS = 10
 STOP_LOSS_PCT = -7.0
 TAKE_PROFIT_PCT = 15.0
 MAX_HOLD_DAYS = 10
+RISK_FREE_RATE = 0.02  # Annual risk-free rate for Sharpe calculation
 
 ExitReason = Literal["score_drop", "stop_loss", "take_profit", "max_hold", "regime_change"]
 
@@ -73,6 +75,96 @@ class PortfolioManager:
         self.supabase = supabase
         self.finnhub = finnhub
         self.yfinance = yfinance
+
+    def calculate_sharpe_ratio(
+        self,
+        daily_returns: list[float],
+        risk_free_rate: float = RISK_FREE_RATE,
+    ) -> float | None:
+        """
+        Calculate annualized Sharpe ratio from daily returns.
+
+        Args:
+            daily_returns: List of daily return percentages
+            risk_free_rate: Annual risk-free rate (default 2%)
+
+        Returns:
+            Sharpe ratio or None if insufficient data
+        """
+        if len(daily_returns) < 5:
+            return None
+
+        # Convert to decimals
+        returns = [r / 100 for r in daily_returns]
+
+        # Calculate mean daily return
+        mean_return = sum(returns) / len(returns)
+
+        # Calculate standard deviation
+        variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+        std_dev = math.sqrt(variance) if variance > 0 else 0
+
+        if std_dev == 0:
+            return None
+
+        # Daily risk-free rate
+        daily_rf = risk_free_rate / 252
+
+        # Annualized Sharpe ratio
+        sharpe = ((mean_return - daily_rf) / std_dev) * math.sqrt(252)
+        return round(sharpe, 4)
+
+    def calculate_max_drawdown(
+        self,
+        equity_values: list[float],
+    ) -> float:
+        """
+        Calculate maximum drawdown from equity curve.
+
+        Args:
+            equity_values: List of portfolio total values over time
+
+        Returns:
+            Maximum drawdown as negative percentage
+        """
+        if len(equity_values) < 2:
+            return 0.0
+
+        peak = equity_values[0]
+        max_dd = 0.0
+
+        for value in equity_values:
+            if value > peak:
+                peak = value
+            drawdown = ((value - peak) / peak) * 100 if peak > 0 else 0
+            if drawdown < max_dd:
+                max_dd = drawdown
+
+        return round(max_dd, 4)
+
+    def calculate_win_rate(self, strategy_mode: str) -> float | None:
+        """
+        Calculate win rate from closed trades.
+
+        Args:
+            strategy_mode: 'conservative' or 'aggressive'
+
+        Returns:
+            Win rate percentage or None if no trades
+        """
+        # Get trade history
+        result = self.supabase._client.table("trade_history").select(
+            "pnl_pct"
+        ).eq(
+            "strategy_mode", strategy_mode
+        ).execute()
+
+        trades = result.data or []
+        if not trades:
+            return None
+
+        wins = sum(1 for t in trades if t.get("pnl_pct", 0) > 0)
+        return round((wins / len(trades)) * 100, 2)
 
     def get_open_positions(self, strategy_mode: str | None = None) -> list[Position]:
         """Get all open positions."""
@@ -472,6 +564,50 @@ class PortfolioManager:
         sp500_cumulative_pct = prev_sp500_cumulative + (sp500_daily_pct or 0)
         alpha = cumulative_pnl_pct - sp500_cumulative_pct
 
+        # Calculate risk metrics from historical data
+        max_drawdown = None
+        sharpe_ratio = None
+        win_rate = None
+
+        try:
+            # Get historical snapshots for risk calculations (30-day rolling)
+            historical_snapshots = self.supabase._client.table(
+                "portfolio_daily_snapshot"
+            ).select(
+                "total_value, daily_pnl_pct"
+            ).eq(
+                "strategy_mode", strategy_mode
+            ).order(
+                "snapshot_date", desc=True
+            ).limit(30).execute()
+
+            historical = historical_snapshots.data or []
+
+            if historical:
+                # Extract equity values and daily returns
+                equity_values = [s.get("total_value", INITIAL_CAPITAL) for s in reversed(historical)]
+                equity_values.append(total_value)  # Add current value
+
+                daily_returns = [
+                    s.get("daily_pnl_pct", 0) for s in reversed(historical)
+                    if s.get("daily_pnl_pct") is not None
+                ]
+                if daily_pnl_pct:
+                    daily_returns.append(daily_pnl_pct)
+
+                # Calculate max drawdown
+                max_drawdown = self.calculate_max_drawdown(equity_values)
+
+                # Calculate Sharpe ratio (need at least 5 data points)
+                if len(daily_returns) >= 5:
+                    sharpe_ratio = self.calculate_sharpe_ratio(daily_returns)
+
+            # Calculate win rate from trade history
+            win_rate = self.calculate_win_rate(strategy_mode)
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate risk metrics: {e}")
+
         # Save snapshot
         snapshot = self.supabase.save_portfolio_snapshot(
             snapshot_date=today,
@@ -485,6 +621,9 @@ class PortfolioManager:
             cumulative_pnl_pct=cumulative_pnl_pct,
             sp500_daily_pct=sp500_daily_pct,
             sp500_cumulative_pct=sp500_cumulative_pct,
+            max_drawdown=max_drawdown,
+            sharpe_ratio=sharpe_ratio,
+            win_rate=win_rate,
             alpha=alpha,
             open_positions=len(positions),
             closed_today=closed_today,
@@ -496,5 +635,16 @@ class PortfolioManager:
             f"Positions=¥{positions_value:.0f}, Daily={daily_pnl_pct:+.2f}%, "
             f"Cumulative={cumulative_pnl_pct:+.2f}%, Alpha={alpha:+.2f}%"
         )
+
+        # Log risk metrics if available
+        risk_info = []
+        if max_drawdown is not None:
+            risk_info.append(f"MDD={max_drawdown:.2f}%")
+        if sharpe_ratio is not None:
+            risk_info.append(f"Sharpe={sharpe_ratio:.2f}")
+        if win_rate is not None:
+            risk_info.append(f"WinRate={win_rate:.1f}%")
+        if risk_info:
+            logger.info(f"Risk metrics ({strategy_mode}): {', '.join(risk_info)}")
 
         return snapshot

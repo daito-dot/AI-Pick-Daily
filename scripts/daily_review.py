@@ -31,7 +31,9 @@ from src.scoring.threshold_optimizer import (
     calculate_optimal_threshold,
     should_apply_adjustment,
     format_adjustment_log,
+    check_overfitting_protection,
 )
+from src.portfolio import PortfolioManager
 
 # Setup logging
 log_dir = Path("logs")
@@ -328,10 +330,16 @@ def adjust_thresholds(supabase: SupabaseClient, results: dict):
 
     This is the core of the closed feedback loop:
     1. Get current thresholds from scoring_config
-    2. Analyze missed opportunities and picked performance
-    3. Calculate optimal threshold adjustment
-    4. Update scoring_config if adjustment is warranted
-    5. Record change in threshold_history for audit
+    2. Check overfitting protection rules
+    3. Analyze missed opportunities and picked performance
+    4. Calculate optimal threshold adjustment
+    5. Update scoring_config if adjustment is warranted
+    6. Record change in threshold_history for audit
+
+    BACKTEST OVERFITTING PROTECTION:
+    - Requires minimum trade count before adjustments
+    - Enforces cooldown period between adjustments
+    - Limits monthly adjustment count
     """
     if results.get("error"):
         logger.info("No data for threshold adjustment")
@@ -340,6 +348,25 @@ def adjust_thresholds(supabase: SupabaseClient, results: dict):
     picked = results.get("picked_returns", [])
     not_picked = results.get("not_picked_returns", [])
     missed = results.get("missed_opportunities", [])
+
+    # Get threshold history for overfitting check
+    try:
+        threshold_history = supabase._client.table("threshold_history").select("*").order(
+            "adjustment_date", desc=True
+        ).limit(30).execute().data or []
+    except Exception as e:
+        logger.warning(f"Failed to fetch threshold history: {e}")
+        threshold_history = []
+
+    # Get trade count for overfitting check
+    try:
+        trade_count_result = supabase._client.table("trade_history").select(
+            "id", count="exact"
+        ).execute()
+        total_trades = trade_count_result.count or 0
+    except Exception as e:
+        logger.warning(f"Failed to fetch trade count: {e}")
+        total_trades = 0
 
     # Process each strategy separately
     for strategy in ["conservative", "aggressive"]:
@@ -353,11 +380,24 @@ def adjust_thresholds(supabase: SupabaseClient, results: dict):
             current_threshold = float(config.get("threshold", 60 if strategy == "conservative" else 75))
             min_threshold = float(config.get("min_threshold", 40))
             max_threshold = float(config.get("max_threshold", 90))
+            last_adjustment_date = config.get("last_adjustment_date")
 
             # Filter by strategy
             strategy_picked = [p for p in picked if p.get("strategy") == strategy]
             strategy_not_picked = [p for p in not_picked if p.get("strategy") == strategy]
             strategy_missed = [m for m in missed if m.get("strategy") == strategy]
+
+            # Count data points (stocks with return data)
+            data_points = len(strategy_picked) + len(strategy_not_picked)
+
+            # OVERFITTING PROTECTION CHECK
+            overfitting_check = check_overfitting_protection(
+                strategy_mode=strategy,
+                total_trades=total_trades,
+                data_points=data_points,
+                last_adjustment_date=last_adjustment_date,
+                threshold_history=threshold_history,
+            )
 
             # Calculate optimal threshold
             analysis = calculate_optimal_threshold(
@@ -370,8 +410,18 @@ def adjust_thresholds(supabase: SupabaseClient, results: dict):
                 max_threshold=max_threshold,
             )
 
+            # Attach overfitting check result to analysis
+            analysis.overfitting_check = overfitting_check
+
             # Log the analysis
             logger.info(format_adjustment_log(analysis))
+
+            # Check overfitting protection FIRST
+            if not overfitting_check.can_adjust:
+                logger.info(
+                    f"THRESHOLD ADJUSTMENT BLOCKED ({strategy}): {overfitting_check.reason}"
+                )
+                continue
 
             # Determine if we should apply the adjustment
             if should_apply_adjustment(analysis):
@@ -456,15 +506,83 @@ def main():
     logger.info("Step 2: Calculating 1-day returns for ALL scored stocks...")
     results_1d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=1, return_field="1d")
 
-    # 3. Generate AI reflection (focus on 5-day results)
+    # 3. PAPER TRADING: Evaluate exit signals and close positions
+    logger.info("Step 3: Evaluating exit signals for open positions...")
+    portfolio = PortfolioManager(
+        supabase=supabase,
+        finnhub=finnhub,
+        yfinance=yf_client,
+    )
+
+    # Get current market regime
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_regime = supabase.get_market_regime(today)
+    market_regime_str = current_regime.get("market_regime") if current_regime else None
+
+    # Get current thresholds
+    v1_config = supabase.get_scoring_config("conservative")
+    v2_config = supabase.get_scoring_config("aggressive")
+    thresholds = {
+        "conservative": float(v1_config.get("threshold", 60)) if v1_config else 60,
+        "aggressive": float(v2_config.get("threshold", 75)) if v2_config else 75,
+    }
+
+    # Get current scores for score-drop exit check
+    today_scores = supabase.get_scores_for_review(today)
+    current_scores = {s["symbol"]: s.get("composite_score", 0) for s in today_scores}
+
+    # Get all open positions
+    all_positions = portfolio.get_open_positions()
+    logger.info(f"Found {len(all_positions)} open positions")
+
+    if all_positions:
+        # Evaluate exit signals
+        exit_signals = portfolio.evaluate_exit_signals(
+            positions=all_positions,
+            current_scores=current_scores if current_scores else None,
+            thresholds=thresholds,
+            market_regime=market_regime_str,
+        )
+
+        if exit_signals:
+            logger.info(f"Exit signals triggered: {len(exit_signals)}")
+            for signal in exit_signals:
+                logger.info(
+                    f"  {signal.position.symbol} ({signal.position.strategy_mode}): "
+                    f"{signal.reason} @ {signal.pnl_pct:+.1f}%"
+                )
+
+            # Close positions
+            trades = portfolio.close_positions(
+                exit_signals=exit_signals,
+                market_regime_at_exit=market_regime_str,
+            )
+            logger.info(f"Closed {len(trades)} positions")
+        else:
+            logger.info("No exit signals triggered")
+
+        # Update portfolio snapshots
+        logger.info("Updating portfolio snapshots...")
+        for strategy in ["conservative", "aggressive"]:
+            closed_today = len([s for s in exit_signals if s.position.strategy_mode == strategy]) if exit_signals else 0
+            try:
+                portfolio.update_portfolio_snapshot(
+                    strategy_mode=strategy,
+                    closed_today=closed_today,
+                )
+            except Exception as e:
+                logger.error(f"Failed to update snapshot for {strategy}: {e}")
+    else:
+        logger.info("No open positions to evaluate")
+
+    # 4. Generate AI reflection (focus on 5-day results)
     if not results_5d.get("error"):
-        logger.info("Step 3: Generating AI reflection...")
+        logger.info("Step 4: Generating AI reflection...")
         reflection = generate_reflection(llm, results_5d)
         logger.info(f"Reflection:\n{reflection}")
 
-        # 4. Save lesson
-        logger.info("Step 4: Saving AI lesson...")
-        today = datetime.now().strftime("%Y-%m-%d")
+        # 5. Save lesson
+        logger.info("Step 5: Saving AI lesson...")
         save_ai_lesson(
             supabase,
             reflection,
@@ -472,12 +590,12 @@ def main():
             today,
         )
 
-        # 5. FEEDBACK LOOP: Adjust thresholds based on performance
-        logger.info("Step 5: Analyzing and adjusting thresholds (FEEDBACK LOOP)...")
+        # 6. FEEDBACK LOOP: Adjust thresholds based on performance
+        logger.info("Step 6: Analyzing and adjusting thresholds (FEEDBACK LOOP)...")
         adjust_thresholds(supabase, results_5d)
 
-    # 6. Get and log performance summary
-    logger.info("Step 6: Getting overall performance summary...")
+    # 7. Get and log performance summary
+    logger.info("Step 7: Getting overall performance summary...")
     for strategy in ["conservative", "aggressive"]:
         summary = supabase.get_performance_summary(days=30, strategy_mode=strategy)
         logger.info(f"\n{strategy.upper()} Summary (30 days):")

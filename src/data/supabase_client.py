@@ -836,6 +836,9 @@ class SupabaseClient:
         alpha: float | None = None,
         open_positions: int = 0,
         closed_today: int = 0,
+        max_drawdown: float | None = None,
+        sharpe_ratio: float | None = None,
+        win_rate: float | None = None,
     ) -> dict[str, Any]:
         """
         Save a daily portfolio snapshot.
@@ -867,6 +870,12 @@ class SupabaseClient:
             record["sp500_cumulative_pct"] = round(sp500_cumulative_pct, 4)
         if alpha is not None:
             record["alpha"] = round(alpha, 4)
+        if max_drawdown is not None:
+            record["max_drawdown"] = round(max_drawdown, 4)
+        if sharpe_ratio is not None:
+            record["sharpe_ratio"] = round(sharpe_ratio, 4)
+        if win_rate is not None:
+            record["win_rate"] = round(win_rate, 2)
 
         result = self._client.table("portfolio_daily_snapshot").upsert(
             record,

@@ -38,6 +38,7 @@ from src.scoring.market_regime import decide_market_regime, calculate_sma, calcu
 from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
 from src.scoring.composite_v2 import run_dual_scoring
+from src.portfolio import PortfolioManager
 
 
 class DataFetchError(Exception):
@@ -567,6 +568,74 @@ def main():
         strategy_mode="aggressive",
         status="published",
     ))
+
+    # 7. PAPER TRADING: Open positions for picks
+    logger.info("Step 7: Opening positions for paper trading...")
+
+    # Check if we should open positions (not in crisis mode)
+    if market_regime.max_picks > 0:
+        portfolio = PortfolioManager(
+            supabase=supabase,
+            finnhub=finnhub,
+            yfinance=yf_client,
+        )
+
+        # Build price dict from stock data
+        prices = {d.symbol: d.open_price for d in v1_stocks_data if d.open_price > 0}
+
+        # Build score dicts
+        v1_score_dict = {s.symbol: s.composite_score for s in dual_result.v1_scores}
+        v2_score_dict = {s.symbol: s.composite_score for s in dual_result.v2_scores}
+
+        # Open positions for V1 Conservative
+        if dual_result.v1_picks:
+            v1_opened = portfolio.open_positions_for_picks(
+                picks=dual_result.v1_picks,
+                strategy_mode="conservative",
+                scores=v1_score_dict,
+                prices=prices,
+            )
+            logger.info(f"V1 opened {len(v1_opened)} positions")
+
+        # Open positions for V2 Aggressive
+        if dual_result.v2_picks:
+            v2_opened = portfolio.open_positions_for_picks(
+                picks=dual_result.v2_picks,
+                strategy_mode="aggressive",
+                scores=v2_score_dict,
+                prices=prices,
+            )
+            logger.info(f"V2 opened {len(v2_opened)} positions")
+
+        # 8. Update portfolio snapshots
+        logger.info("Step 8: Updating portfolio snapshots...")
+
+        # Get S&P 500 daily return for benchmark
+        sp500_daily_pct = None
+        try:
+            sp500_candles = finnhub.get_stock_candles(
+                "SPY",
+                resolution="D",
+                from_timestamp=int((datetime.now() - timedelta(days=2)).timestamp()),
+            )
+            if sp500_candles and len(sp500_candles.get("close", [])) >= 2:
+                closes = sp500_candles["close"]
+                sp500_daily_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
+                logger.info(f"S&P 500 daily return: {sp500_daily_pct:.2f}%")
+        except Exception as e:
+            logger.warning(f"Failed to get S&P 500 daily return: {e}")
+
+        for strategy in ["conservative", "aggressive"]:
+            try:
+                portfolio.update_portfolio_snapshot(
+                    strategy_mode=strategy,
+                    sp500_daily_pct=sp500_daily_pct,
+                )
+            except Exception as e:
+                logger.error(f"Failed to update snapshot for {strategy}: {e}")
+
+    else:
+        logger.info("Skipping position opening - market in crisis mode")
 
     logger.info("=" * 50)
     logger.info("Daily scoring batch completed successfully")

@@ -9,12 +9,47 @@ This is the core of the closed feedback loop:
 2. Calculate optimal threshold adjustment
 3. Update scoring_config in database
 4. Record change in threshold_history for audit
+
+BACKTEST OVERFITTING PROTECTION:
+- Minimum trade count before adjustments are allowed
+- Cooldown period between adjustments
+- Maximum adjustments per month
+- All trial counts are logged for transparency
+
+Reference: "The Probability of Backtest Overfitting" (Bailey et al., 2014)
 """
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# === OVERFITTING PROTECTION CONSTANTS ===
+# Minimum number of completed trades before allowing threshold adjustments
+# This prevents adjusting based on noise from small sample sizes
+MIN_TRADES_FOR_ADJUSTMENT = 20
+
+# Minimum days between threshold adjustments (cooldown)
+# Prevents rapid oscillation and allows time for evaluation
+ADJUSTMENT_COOLDOWN_DAYS = 7
+
+# Maximum adjustments per month to limit "strategy shopping"
+MAX_ADJUSTMENTS_PER_MONTH = 4
+
+# Minimum data points (scored stocks with returns) for analysis
+MIN_DATA_POINTS = 50
+
+
+@dataclass
+class OverfittingCheck:
+    """Result of backtest overfitting protection checks."""
+    can_adjust: bool
+    reason: str
+    total_trades: int
+    days_since_last_adjustment: int | None
+    adjustments_this_month: int
+    data_points: int
 
 
 @dataclass
@@ -35,6 +70,8 @@ class ThresholdAnalysis:
     not_picked_avg_return: float
     # Validation
     wfe_score: float  # Walk-Forward Efficiency
+    # Overfitting protection
+    overfitting_check: OverfittingCheck | None = None
 
 
 def calculate_optimal_threshold(
@@ -240,8 +277,109 @@ def format_adjustment_log(analysis: ThresholdAnalysis) -> str:
         f"    Avg Return: {analysis.picked_avg_return:+.1f}%",
         f"  - Not Picked: {analysis.not_picked_count}",
         f"    Avg Return: {analysis.not_picked_avg_return:+.1f}%",
+    ]
+
+    # Add overfitting protection status
+    if analysis.overfitting_check:
+        check = analysis.overfitting_check
+        lines.extend([
+            f"",
+            f"Overfitting Protection:",
+            f"  - Total Trades: {check.total_trades} (min: {MIN_TRADES_FOR_ADJUSTMENT})",
+            f"  - Data Points: {check.data_points} (min: {MIN_DATA_POINTS})",
+            f"  - Days Since Last Adjustment: {check.days_since_last_adjustment or 'N/A'} (cooldown: {ADJUSTMENT_COOLDOWN_DAYS})",
+            f"  - Adjustments This Month: {check.adjustments_this_month} (max: {MAX_ADJUSTMENTS_PER_MONTH})",
+            f"  - Can Adjust: {'YES' if check.can_adjust else 'NO'} ({check.reason})",
+        ])
+
+    lines.extend([
         f"",
         f"Reason: {analysis.reason}",
         f"{'='*50}",
-    ]
+    ])
     return "\n".join(lines)
+
+
+def check_overfitting_protection(
+    strategy_mode: str,
+    total_trades: int,
+    data_points: int,
+    last_adjustment_date: str | None,
+    threshold_history: list[dict[str, Any]],
+) -> OverfittingCheck:
+    """
+    Check if threshold adjustment is allowed based on overfitting protection rules.
+
+    This implements safeguards from "The Probability of Backtest Overfitting":
+    - Require minimum sample size before adjustments
+    - Cooldown period between adjustments
+    - Limit total adjustments to prevent "strategy shopping"
+
+    Args:
+        strategy_mode: 'conservative' or 'aggressive'
+        total_trades: Number of completed trades
+        data_points: Number of scored stocks with return data
+        last_adjustment_date: Date of last threshold change (YYYY-MM-DD)
+        threshold_history: Recent threshold changes
+
+    Returns:
+        OverfittingCheck with can_adjust flag and reason
+    """
+    today = datetime.now().date()
+
+    # Calculate days since last adjustment
+    days_since_last = None
+    if last_adjustment_date:
+        try:
+            last_date = datetime.strptime(last_adjustment_date, "%Y-%m-%d").date()
+            days_since_last = (today - last_date).days
+        except (ValueError, TypeError):
+            pass
+
+    # Count adjustments this month
+    month_start = today.replace(day=1)
+    adjustments_this_month = sum(
+        1 for h in threshold_history
+        if h.get("strategy_mode") == strategy_mode
+        and h.get("adjustment_date")
+        and datetime.strptime(h["adjustment_date"], "%Y-%m-%d").date() >= month_start
+    )
+
+    # Check rules in order of priority
+    reasons = []
+
+    # Rule 1: Minimum trades
+    if total_trades < MIN_TRADES_FOR_ADJUSTMENT:
+        reasons.append(
+            f"トレード数不足（{total_trades}/{MIN_TRADES_FOR_ADJUSTMENT}）"
+        )
+
+    # Rule 2: Minimum data points
+    if data_points < MIN_DATA_POINTS:
+        reasons.append(
+            f"データ不足（{data_points}/{MIN_DATA_POINTS}）"
+        )
+
+    # Rule 3: Cooldown period
+    if days_since_last is not None and days_since_last < ADJUSTMENT_COOLDOWN_DAYS:
+        reasons.append(
+            f"クールダウン中（{days_since_last}/{ADJUSTMENT_COOLDOWN_DAYS}日）"
+        )
+
+    # Rule 4: Monthly limit
+    if adjustments_this_month >= MAX_ADJUSTMENTS_PER_MONTH:
+        reasons.append(
+            f"月間上限到達（{adjustments_this_month}/{MAX_ADJUSTMENTS_PER_MONTH}回）"
+        )
+
+    can_adjust = len(reasons) == 0
+    reason = "調整可能" if can_adjust else "; ".join(reasons)
+
+    return OverfittingCheck(
+        can_adjust=can_adjust,
+        reason=reason,
+        total_trades=total_trades,
+        days_since_last_adjustment=days_since_last,
+        adjustments_this_month=adjustments_this_month,
+        data_points=data_points,
+    )
