@@ -166,6 +166,83 @@ class PortfolioManager:
         wins = sum(1 for t in trades if t.get("pnl_pct", 0) > 0)
         return round((wins / len(trades)) * 100, 2)
 
+    def _get_closed_trades_value(self, strategy_mode: str, date: str) -> float:
+        """
+        Get total exit value of trades closed on a specific date.
+
+        This is used to add back cash when positions are closed.
+        """
+        try:
+            result = self.supabase._client.table("trade_history").select(
+                "exit_price, shares"
+            ).eq(
+                "strategy_mode", strategy_mode
+            ).eq(
+                "exit_date", date
+            ).execute()
+
+            trades = result.data or []
+            return sum(
+                float(t.get("exit_price", 0)) * float(t.get("shares", 0))
+                for t in trades
+            )
+        except Exception:
+            return 0.0
+
+    def _get_invested_cost(self, strategy_mode: str) -> float:
+        """
+        Get total invested cost (entry value) of all open positions.
+
+        This is the amount of cash spent on positions.
+        """
+        positions = self.get_open_positions(strategy_mode)
+        return sum(p.position_value for p in positions)
+
+    def _get_positions_opened_on(self, strategy_mode: str, date: str) -> float:
+        """
+        Get total entry value of positions opened on a specific date.
+        """
+        try:
+            result = self.supabase._client.table("virtual_portfolio").select(
+                "position_value"
+            ).eq(
+                "strategy_mode", strategy_mode
+            ).eq(
+                "entry_date", date
+            ).execute()
+
+            positions = result.data or []
+            return sum(float(p.get("position_value", 0)) for p in positions)
+        except Exception:
+            return 0.0
+
+    def _get_positions_opened_after(
+        self,
+        strategy_mode: str,
+        timestamp: str | None,
+    ) -> float:
+        """
+        Get total entry value of positions opened after a timestamp.
+
+        Used for same-day updates to track new positions since last snapshot.
+        """
+        if not timestamp:
+            return 0.0
+
+        try:
+            result = self.supabase._client.table("virtual_portfolio").select(
+                "position_value"
+            ).eq(
+                "strategy_mode", strategy_mode
+            ).gt(
+                "created_at", timestamp
+            ).execute()
+
+            positions = result.data or []
+            return sum(float(p.get("position_value", 0)) for p in positions)
+        except Exception:
+            return 0.0
+
     def get_open_positions(self, strategy_mode: str | None = None) -> list[Position]:
         """Get all open positions."""
         positions_data = self.supabase.get_open_positions(strategy_mode)
@@ -538,16 +615,39 @@ class PortfolioManager:
         # Get previous snapshot for cumulative calculations
         prev_snapshot = self.supabase.get_latest_portfolio_snapshot(strategy_mode)
 
-        if prev_snapshot and prev_snapshot.get("snapshot_date") != today:
+        if prev_snapshot:
             prev_total = float(prev_snapshot.get("total_value", INITIAL_CAPITAL))
             prev_cumulative_pnl = float(prev_snapshot.get("cumulative_pnl", 0))
             prev_sp500_cumulative = float(prev_snapshot.get("sp500_cumulative_pct", 0))
-            cash_balance = float(prev_snapshot.get("cash_balance", INITIAL_CAPITAL))
+
+            # Calculate cash balance properly:
+            # Cash changes when:
+            # - Positions are opened: cash decreases by position entry value
+            # - Positions are closed: cash increases by position exit value
+            #
+            # Formula: Cash = Previous Cash - New Opens + Closes
+            prev_cash = float(prev_snapshot.get("cash_balance", INITIAL_CAPITAL))
+
+            if prev_snapshot.get("snapshot_date") == today:
+                # Same day update: add back closed trades (may have been processed)
+                closed_trades_today = self._get_closed_trades_value(strategy_mode, today)
+                # Get positions opened after last snapshot (new positions)
+                new_positions_cost = self._get_positions_opened_after(
+                    strategy_mode,
+                    prev_snapshot.get("created_at"),
+                )
+                cash_balance = prev_cash - new_positions_cost + closed_trades_today
+            else:
+                # New day: previous cash - new positions opened today + closed today
+                new_positions_cost = self._get_positions_opened_on(strategy_mode, today)
+                closed_trades_today = self._get_closed_trades_value(strategy_mode, today)
+                cash_balance = prev_cash - new_positions_cost + closed_trades_today
         else:
             prev_total = INITIAL_CAPITAL
             prev_cumulative_pnl = 0
             prev_sp500_cumulative = 0
-            cash_balance = INITIAL_CAPITAL - positions_value
+            # First snapshot: calculate cash as what's left after positions
+            cash_balance = INITIAL_CAPITAL - self._get_invested_cost(strategy_mode)
 
         # Calculate total value
         total_value = cash_balance + positions_value
