@@ -174,7 +174,7 @@ class PortfolioManager:
         """
         try:
             result = self.supabase._client.table("trade_history").select(
-                "exit_price, shares"
+                "exit_price, shares, symbol"
             ).eq(
                 "strategy_mode", strategy_mode
             ).eq(
@@ -182,11 +182,24 @@ class PortfolioManager:
             ).execute()
 
             trades = result.data or []
-            return sum(
-                float(t.get("exit_price", 0)) * float(t.get("shares", 0))
-                for t in trades
+            total = 0.0
+            for t in trades:
+                exit_price = float(t.get("exit_price", 0) or 0)
+                shares = float(t.get("shares", 0) or 0)
+                trade_value = exit_price * shares
+                total += trade_value
+                logger.debug(
+                    f"Closed trade {t.get('symbol')}: "
+                    f"{exit_price:.2f} × {shares:.4f} = {trade_value:.2f}"
+                )
+
+            logger.info(
+                f"Total closed trades value for {strategy_mode} on {date}: "
+                f"{len(trades)} trades = ¥{total:.0f}"
             )
-        except Exception:
+            return total
+        except Exception as e:
+            logger.error(f"Failed to get closed trades value: {e}")
             return 0.0
 
     def _get_invested_cost(self, strategy_mode: str) -> float:
@@ -204,7 +217,7 @@ class PortfolioManager:
         """
         try:
             result = self.supabase._client.table("virtual_portfolio").select(
-                "position_value"
+                "position_value, symbol"
             ).eq(
                 "strategy_mode", strategy_mode
             ).eq(
@@ -212,8 +225,14 @@ class PortfolioManager:
             ).execute()
 
             positions = result.data or []
-            return sum(float(p.get("position_value", 0)) for p in positions)
-        except Exception:
+            total = sum(float(p.get("position_value", 0) or 0) for p in positions)
+            logger.info(
+                f"Positions opened for {strategy_mode} on {date}: "
+                f"{len(positions)} positions = ¥{total:.0f}"
+            )
+            return total
+        except Exception as e:
+            logger.error(f"Failed to get positions opened on {date}: {e}")
             return 0.0
 
     def _get_positions_opened_after(
@@ -231,7 +250,7 @@ class PortfolioManager:
 
         try:
             result = self.supabase._client.table("virtual_portfolio").select(
-                "position_value"
+                "position_value, symbol"
             ).eq(
                 "strategy_mode", strategy_mode
             ).gt(
@@ -239,8 +258,15 @@ class PortfolioManager:
             ).execute()
 
             positions = result.data or []
-            return sum(float(p.get("position_value", 0)) for p in positions)
-        except Exception:
+            total = sum(float(p.get("position_value", 0) or 0) for p in positions)
+            if positions:
+                logger.info(
+                    f"New positions for {strategy_mode} after {timestamp}: "
+                    f"{len(positions)} positions = ¥{total:.0f}"
+                )
+            return total
+        except Exception as e:
+            logger.error(f"Failed to get positions opened after {timestamp}: {e}")
             return 0.0
 
     def get_open_positions(self, strategy_mode: str | None = None) -> list[Position]:
