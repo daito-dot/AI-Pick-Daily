@@ -27,6 +27,12 @@ TAKE_PROFIT_PCT = 15.0
 MAX_HOLD_DAYS = 10
 RISK_FREE_RATE = 0.02  # Annual risk-free rate for Sharpe calculation
 
+# Drawdown Management Thresholds
+# See: docs/paper_trading_strategy.md Section 2.4
+MDD_WARNING_THRESHOLD = -10.0  # Reduce position size by 50%
+MDD_STOP_NEW_THRESHOLD = -15.0  # Stop opening new positions
+MDD_CRITICAL_THRESHOLD = -20.0  # Consider closing all positions
+
 ExitReason = Literal["score_drop", "stop_loss", "take_profit", "max_hold", "regime_change"]
 
 
@@ -55,6 +61,16 @@ class ExitSignal:
     pnl_pct: float
 
 
+@dataclass
+class DrawdownStatus:
+    """Current drawdown status for position sizing decisions."""
+    current_mdd: float  # Current max drawdown (negative percentage)
+    can_open_positions: bool  # Whether new positions are allowed
+    position_size_multiplier: float  # 1.0 = normal, 0.5 = reduced, 0 = none
+    status: Literal["normal", "warning", "stopped", "critical"]
+    message: str
+
+
 class PortfolioManager:
     """
     Manages virtual portfolio for paper trading simulation.
@@ -75,6 +91,67 @@ class PortfolioManager:
         self.supabase = supabase
         self.finnhub = finnhub
         self.yfinance = yfinance
+
+    def get_drawdown_status(self, strategy_mode: str) -> DrawdownStatus:
+        """
+        Get current drawdown status to determine position sizing.
+
+        Thresholds:
+        - MDD > -10%: Normal (multiplier = 1.0)
+        - -10% >= MDD > -15%: Warning (multiplier = 0.5)
+        - -15% >= MDD > -20%: Stopped (multiplier = 0)
+        - MDD <= -20%: Critical (multiplier = 0, consider closing all)
+
+        Returns:
+            DrawdownStatus with current MDD and position sizing guidance
+        """
+        snapshot = self.supabase.get_latest_portfolio_snapshot(strategy_mode)
+
+        if not snapshot:
+            # No history yet, assume normal
+            return DrawdownStatus(
+                current_mdd=0.0,
+                can_open_positions=True,
+                position_size_multiplier=1.0,
+                status="normal",
+                message="No portfolio history, starting fresh",
+            )
+
+        current_mdd = float(snapshot.get("max_drawdown", 0) or 0)
+
+        # Determine status based on MDD thresholds
+        if current_mdd > MDD_WARNING_THRESHOLD:
+            return DrawdownStatus(
+                current_mdd=current_mdd,
+                can_open_positions=True,
+                position_size_multiplier=1.0,
+                status="normal",
+                message=f"MDD {current_mdd:.1f}% within normal range",
+            )
+        elif current_mdd > MDD_STOP_NEW_THRESHOLD:
+            return DrawdownStatus(
+                current_mdd=current_mdd,
+                can_open_positions=True,
+                position_size_multiplier=0.5,
+                status="warning",
+                message=f"MDD {current_mdd:.1f}% - reducing position size by 50%",
+            )
+        elif current_mdd > MDD_CRITICAL_THRESHOLD:
+            return DrawdownStatus(
+                current_mdd=current_mdd,
+                can_open_positions=False,
+                position_size_multiplier=0.0,
+                status="stopped",
+                message=f"MDD {current_mdd:.1f}% - new positions blocked",
+            )
+        else:
+            return DrawdownStatus(
+                current_mdd=current_mdd,
+                can_open_positions=False,
+                position_size_multiplier=0.0,
+                status="critical",
+                message=f"MDD {current_mdd:.1f}% CRITICAL - consider closing all positions",
+            )
 
     def calculate_sharpe_ratio(
         self,
@@ -342,6 +419,11 @@ class PortfolioManager:
         """
         Open new positions for today's picks.
 
+        Includes drawdown management:
+        - MDD > -10%: Normal position size
+        - -10% >= MDD > -15%: Position size reduced by 50%
+        - MDD <= -15%: No new positions allowed
+
         Args:
             picks: List of symbols to buy
             strategy_mode: 'conservative' or 'aggressive'
@@ -353,6 +435,16 @@ class PortfolioManager:
         """
         if not picks:
             logger.info(f"No picks for {strategy_mode}, skipping position opening")
+            return []
+
+        # Check drawdown status before opening positions
+        dd_status = self.get_drawdown_status(strategy_mode)
+        logger.info(f"Drawdown status ({strategy_mode}): {dd_status.status} - {dd_status.message}")
+
+        if not dd_status.can_open_positions:
+            logger.warning(
+                f"Position opening blocked for {strategy_mode}: {dd_status.message}"
+            )
             return []
 
         # Get current state
@@ -372,6 +464,15 @@ class PortfolioManager:
             len(new_picks),
             len(current_positions),
         )
+
+        # Apply drawdown multiplier
+        if dd_status.position_size_multiplier < 1.0:
+            original_size = position_size
+            position_size *= dd_status.position_size_multiplier
+            logger.info(
+                f"Position size reduced: ¥{original_size:.0f} -> ¥{position_size:.0f} "
+                f"(multiplier: {dd_status.position_size_multiplier})"
+            )
 
         if position_size <= 0:
             logger.warning(f"No cash or slots available for {strategy_mode}")

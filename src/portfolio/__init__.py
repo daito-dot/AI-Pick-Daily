@@ -1,4 +1,4 @@
 """Portfolio management module."""
-from .manager import PortfolioManager, Position, ExitSignal
+from .manager import PortfolioManager, Position, ExitSignal, DrawdownStatus
 
-__all__ = ["PortfolioManager", "Position", "ExitSignal"]
+__all__ = ["PortfolioManager", "Position", "ExitSignal", "DrawdownStatus"]

@@ -346,7 +346,7 @@ def is_liquid(stock) -> bool:
 
 ## 8. 実装状況
 
-**最終更新**: 2025-12-22
+**最終更新**: 2025-12-22 (Phase 3: ドローダウン管理追加)
 
 ### 完了項目 ✅
 
@@ -359,6 +359,7 @@ def is_liquid(stock) -> bool:
 | リスク指標計算 | `src/portfolio/manager.py` | Sharpe, MDD, WinRate |
 | 閾値自動調整 | `scripts/daily_review.py` | Step 6 |
 | 過学習防止 | `src/scoring/threshold_optimizer.py` | MIN_TRADES=20, COOLDOWN=7日 |
+| **ドローダウン管理** | `src/portfolio/manager.py` | MDD 10%/15%/20% 段階対応 |
 
 ### バッチ処理フロー（実装版）
 
@@ -366,6 +367,10 @@ def is_liquid(stock) -> bool:
 Morning Batch (daily_scoring.py)
 ├── Step 1-6: スコアリング・保存（既存）
 ├── Step 7: ポジション開設
+│   ├── get_drawdown_status() でMDDチェック
+│   │   ├── MDD > -10%: 通常サイズ
+│   │   ├── -10% >= MDD > -15%: サイズ50%縮小
+│   │   └── MDD <= -15%: 新規ポジション停止
 │   ├── PortfolioManager.open_positions_for_picks()
 │   ├── Equal Weight でポジションサイズ計算
 │   └── 既保有銘柄は除外
@@ -376,7 +381,7 @@ Morning Batch (daily_scoring.py)
 
 Evening Batch (daily_review.py)
 ├── Step 1-2: リターン計算（既存）
-├── Step 3: エグジット評価（NEW）
+├── Step 3: エグジット評価
 │   ├── PortfolioManager.evaluate_exit_signals()
 │   │   ├── Stop Loss (-7%)
 │   │   ├── Take Profit (+15%)
@@ -404,12 +409,27 @@ cash_balance += exit_price * shares
 cash_balance = prev_cash + closed_trades_value - new_positions_cost
 ```
 
+### ドローダウン管理ロジック
+
+```python
+# MDD閾値 (src/portfolio/manager.py)
+MDD_WARNING_THRESHOLD = -10.0   # ポジションサイズ50%縮小
+MDD_STOP_NEW_THRESHOLD = -15.0  # 新規ポジション停止
+MDD_CRITICAL_THRESHOLD = -20.0  # 全ポジションクローズ検討
+
+# DrawdownStatus判定
+def get_drawdown_status(strategy_mode: str) -> DrawdownStatus:
+    # MDD > -10%: normal (multiplier=1.0)
+    # -10% >= MDD > -15%: warning (multiplier=0.5)
+    # -15% >= MDD > -20%: stopped (multiplier=0)
+    # MDD <= -20%: critical (multiplier=0)
+```
+
 ### 未実装（将来）
 
 | 項目 | 優先度 | 備考 |
 |------|--------|------|
 | 流動性フィルタ | LOW | S&P 500 Top 50 は全て大型株のため不要 |
-| ドローダウン時のポジション縮小 | MEDIUM | MDD 10%/15%/20% で段階的対応 |
 | Half Kelly ポジションサイジング | LOW | 20トレード以上蓄積後 |
 | トレーリングストップ | LOW | 将来的な検討項目 |
 
