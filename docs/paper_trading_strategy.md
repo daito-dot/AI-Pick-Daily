@@ -344,14 +344,74 @@ def is_liquid(stock) -> bool:
 
 ---
 
-## 8. 次のステップ
+## 8. 実装状況
 
-このドキュメントに基づき、以下の順で実装を進める:
+**最終更新**: 2025-12-22
 
-1. [ ] Morning Batch へのポジション開設処理追加
-2. [ ] Evening Batch へのエグジット評価追加
-3. [ ] ドローダウン計算と監視
-4. [ ] ダッシュボードへのリスク指標表示
+### 完了項目 ✅
+
+| 項目 | 実装ファイル | 備考 |
+|------|-------------|------|
+| Morning Batch ポジション開設 | `scripts/daily_scoring.py` | Step 7-8 |
+| Evening Batch エグジット評価 | `scripts/daily_review.py` | Step 3 |
+| ポートフォリオスナップショット | `src/portfolio/manager.py` | 毎バッチ更新 |
+| キャッシュ残高追跡 | `src/portfolio/manager.py` | 開設/クローズ時に反映 |
+| リスク指標計算 | `src/portfolio/manager.py` | Sharpe, MDD, WinRate |
+| 閾値自動調整 | `scripts/daily_review.py` | Step 6 |
+| 過学習防止 | `src/scoring/threshold_optimizer.py` | MIN_TRADES=20, COOLDOWN=7日 |
+
+### バッチ処理フロー（実装版）
+
+```
+Morning Batch (daily_scoring.py)
+├── Step 1-6: スコアリング・保存（既存）
+├── Step 7: ポジション開設
+│   ├── PortfolioManager.open_positions_for_picks()
+│   ├── Equal Weight でポジションサイズ計算
+│   └── 既保有銘柄は除外
+└── Step 8: スナップショット更新
+    ├── S&P 500 日次リターン取得
+    ├── リスク指標計算（Sharpe, MDD, WinRate）
+    └── portfolio_daily_snapshot 保存
+
+Evening Batch (daily_review.py)
+├── Step 1-2: リターン計算（既存）
+├── Step 3: エグジット評価（NEW）
+│   ├── PortfolioManager.evaluate_exit_signals()
+│   │   ├── Stop Loss (-7%)
+│   │   ├── Take Profit (+15%)
+│   │   ├── Regime Change (Crisis)
+│   │   ├── Score Drop (< threshold)
+│   │   └── Max Hold (10日)
+│   ├── PortfolioManager.close_positions()
+│   └── スナップショット更新
+├── Step 4-5: AI振り返り（既存）
+├── Step 6: 閾値調整（既存）
+└── Step 7: パフォーマンスサマリー（既存）
+```
+
+### キャッシュ残高計算ロジック
+
+```python
+# ポジション開設時
+cash_balance -= position_value
+
+# ポジションクローズ時
+cash_balance += exit_price * shares
+
+# スナップショット更新時
+# 前回のキャッシュ + 当日クローズ - 当日開設
+cash_balance = prev_cash + closed_trades_value - new_positions_cost
+```
+
+### 未実装（将来）
+
+| 項目 | 優先度 | 備考 |
+|------|--------|------|
+| 流動性フィルタ | LOW | S&P 500 Top 50 は全て大型株のため不要 |
+| ドローダウン時のポジション縮小 | MEDIUM | MDD 10%/15%/20% で段階的対応 |
+| Half Kelly ポジションサイジング | LOW | 20トレード以上蓄積後 |
+| トレーリングストップ | LOW | 将来的な検討項目 |
 
 ---
 
