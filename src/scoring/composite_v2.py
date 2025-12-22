@@ -222,6 +222,8 @@ def run_dual_scoring(
     stocks_data: list[StockData],
     v2_stocks_data: list[V2StockData],
     market_regime: MarketRegimeResult,
+    v1_threshold: int | None = None,
+    v2_threshold: int | None = None,
 ) -> DualScoringResult:
     """
     Run both V1 and V2 scoring pipelines.
@@ -230,6 +232,8 @@ def run_dual_scoring(
         stocks_data: V1 stock data
         v2_stocks_data: V2 extended stock data
         market_regime: Current market regime
+        v1_threshold: Optional dynamic threshold for V1 (from DB). Falls back to config if None.
+        v2_threshold: Optional dynamic threshold for V2 (from DB). Falls back to config if None.
 
     Returns:
         DualScoringResult with both strategies
@@ -237,6 +241,10 @@ def run_dual_scoring(
     strategy_config = config.strategy
     v1_weights = get_adjusted_weights(market_regime)  # V1 uses regime-adjusted weights
     v2_weights = strategy_config.v2_weights
+
+    # Use dynamic thresholds if provided, otherwise fall back to config
+    v1_min_score = v1_threshold if v1_threshold is not None else strategy_config.v1_min_score
+    v2_min_score = v2_threshold if v2_threshold is not None else strategy_config.v2_min_score
 
     # Create mapping for V2 data
     v2_data_map = {d.symbol: d for d in v2_stocks_data}
@@ -279,8 +287,8 @@ def run_dual_scoring(
     v1_max_picks = market_regime.max_picks  # V1 respects regime
     v2_max_picks = strategy_config.v2_max_picks if market_regime.max_picks > 0 else 0
 
-    v1_picks = select_picks(v1_scores, v1_max_picks, strategy_config.v1_min_score)
-    v2_picks = select_picks(v2_scores, v2_max_picks, strategy_config.v2_min_score)
+    v1_picks = select_picks(v1_scores, v1_max_picks, v1_min_score)
+    v2_picks = select_picks(v2_scores, v2_max_picks, v2_min_score)
 
     return DualScoringResult(
         v1_scores=v1_scores,

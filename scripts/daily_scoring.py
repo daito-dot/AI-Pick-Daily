@@ -460,17 +460,36 @@ def main():
         logger.error("Batch failed - insufficient data for reliable recommendations")
         sys.exit(1)
 
-    # 4. Run dual scoring (V1 Conservative + V2 Aggressive)
-    logger.info("Step 4: Running dual scoring pipeline...")
-    dual_result = run_dual_scoring(v1_stocks_data, v2_stocks_data, market_regime)
+    # 4. Fetch dynamic thresholds from database (FEEDBACK LOOP)
+    logger.info("Step 4: Fetching dynamic thresholds from scoring_config...")
+    try:
+        v1_config = supabase.get_scoring_config("conservative")
+        v2_config = supabase.get_scoring_config("aggressive")
+        v1_threshold = int(v1_config.get("threshold", 60)) if v1_config else None
+        v2_threshold = int(v2_config.get("threshold", 75)) if v2_config else None
+        logger.info(f"Dynamic thresholds: V1={v1_threshold}, V2={v2_threshold}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch dynamic thresholds, using defaults: {e}")
+        v1_threshold = None
+        v2_threshold = None
+
+    # 5. Run dual scoring (V1 Conservative + V2 Aggressive)
+    logger.info("Step 5: Running dual scoring pipeline...")
+    dual_result = run_dual_scoring(
+        v1_stocks_data,
+        v2_stocks_data,
+        market_regime,
+        v1_threshold=v1_threshold,
+        v2_threshold=v2_threshold,
+    )
 
     logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
     logger.info(f"V1 picks: {dual_result.v1_picks}")
     logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
     logger.info(f"V2 picks: {dual_result.v2_picks}")
 
-    # 5. Save results for both strategies
-    logger.info("Step 5: Saving results...")
+    # 6. Save results for both strategies
+    logger.info("Step 6: Saving results...")
 
     # Helper to get price for a symbol
     def get_price(symbol: str) -> float:

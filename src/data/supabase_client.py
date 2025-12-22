@@ -529,3 +529,348 @@ class SupabaseClient:
         ).execute()
 
         return result.data or []
+
+    # ============ Scoring Config (Dynamic Thresholds) ============
+
+    def get_scoring_config(
+        self,
+        strategy_mode: str,
+    ) -> dict[str, Any]:
+        """
+        Get current scoring configuration for a strategy.
+
+        Args:
+            strategy_mode: 'conservative' or 'aggressive'
+
+        Returns:
+            Config dict with threshold and limits
+        """
+        result = self._client.table("scoring_config").select("*").eq(
+            "strategy_mode", strategy_mode
+        ).single().execute()
+
+        return result.data or {}
+
+    def get_all_scoring_configs(self) -> list[dict[str, Any]]:
+        """
+        Get all scoring configurations.
+
+        Returns:
+            List of config dicts
+        """
+        result = self._client.table("scoring_config").select("*").execute()
+        return result.data or []
+
+    def update_threshold(
+        self,
+        strategy_mode: str,
+        new_threshold: float,
+        reason: str,
+    ) -> dict[str, Any]:
+        """
+        Update the scoring threshold for a strategy.
+
+        Args:
+            strategy_mode: 'conservative' or 'aggressive'
+            new_threshold: New threshold value
+            reason: Reason for the change
+
+        Returns:
+            Updated config
+        """
+        result = self._client.table("scoring_config").update({
+            "threshold": new_threshold,
+            "last_adjustment_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "last_adjustment_reason": reason,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq(
+            "strategy_mode", strategy_mode
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def save_threshold_history(
+        self,
+        strategy_mode: str,
+        old_threshold: float,
+        new_threshold: float,
+        reason: str,
+        missed_opportunities_count: int | None = None,
+        missed_avg_return: float | None = None,
+        missed_avg_score: float | None = None,
+        picked_count: int | None = None,
+        picked_avg_return: float | None = None,
+        not_picked_count: int | None = None,
+        not_picked_avg_return: float | None = None,
+        wfe_score: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Save a threshold change to history for audit and rollback.
+
+        Args:
+            strategy_mode: 'conservative' or 'aggressive'
+            old_threshold: Previous threshold value
+            new_threshold: New threshold value
+            reason: Reason for the change
+            (optional) Performance metrics at time of change
+
+        Returns:
+            Inserted record
+        """
+        record = {
+            "strategy_mode": strategy_mode,
+            "old_threshold": old_threshold,
+            "new_threshold": new_threshold,
+            "adjustment_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "reason": reason,
+        }
+
+        if missed_opportunities_count is not None:
+            record["missed_opportunities_count"] = missed_opportunities_count
+        if missed_avg_return is not None:
+            record["missed_avg_return"] = round(missed_avg_return, 4)
+        if missed_avg_score is not None:
+            record["missed_avg_score"] = round(missed_avg_score, 2)
+        if picked_count is not None:
+            record["picked_count"] = picked_count
+        if picked_avg_return is not None:
+            record["picked_avg_return"] = round(picked_avg_return, 4)
+        if not_picked_count is not None:
+            record["not_picked_count"] = not_picked_count
+        if not_picked_avg_return is not None:
+            record["not_picked_avg_return"] = round(not_picked_avg_return, 4)
+        if wfe_score is not None:
+            record["wfe_score"] = round(wfe_score, 2)
+
+        result = self._client.table("threshold_history").insert(record).execute()
+        return result.data[0] if result.data else {}
+
+    # ============ Virtual Portfolio ============
+
+    def get_open_positions(
+        self,
+        strategy_mode: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Get all open positions in the virtual portfolio.
+
+        Args:
+            strategy_mode: Optional filter by strategy
+
+        Returns:
+            List of open position records
+        """
+        query = self._client.table("virtual_portfolio").select("*").eq(
+            "status", "open"
+        )
+
+        if strategy_mode:
+            query = query.eq("strategy_mode", strategy_mode)
+
+        result = query.order("entry_date", desc=True).execute()
+        return result.data or []
+
+    def open_position(
+        self,
+        strategy_mode: str,
+        symbol: str,
+        entry_date: str,
+        entry_price: float,
+        shares: float,
+        position_value: float,
+        entry_score: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Open a new position in the virtual portfolio.
+
+        Args:
+            strategy_mode: 'conservative' or 'aggressive'
+            symbol: Stock symbol
+            entry_date: Date of entry (YYYY-MM-DD)
+            entry_price: Entry price
+            shares: Number of shares
+            position_value: Total position value
+            entry_score: Score at entry time
+
+        Returns:
+            Inserted record
+        """
+        record = {
+            "strategy_mode": strategy_mode,
+            "symbol": symbol,
+            "entry_date": entry_date,
+            "entry_price": entry_price,
+            "shares": shares,
+            "position_value": position_value,
+            "status": "open",
+        }
+
+        if entry_score is not None:
+            record["entry_score"] = entry_score
+
+        result = self._client.table("virtual_portfolio").upsert(
+            record,
+            on_conflict="strategy_mode,symbol,entry_date",
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def close_position(
+        self,
+        position_id: str,
+        exit_date: str,
+        exit_price: float,
+        exit_reason: str,
+        realized_pnl: float,
+        realized_pnl_pct: float,
+    ) -> dict[str, Any]:
+        """
+        Close an existing position.
+
+        Args:
+            position_id: UUID of the position
+            exit_date: Date of exit (YYYY-MM-DD)
+            exit_price: Exit price
+            exit_reason: Reason for closing
+            realized_pnl: Realized P&L in currency
+            realized_pnl_pct: Realized P&L percentage
+
+        Returns:
+            Updated record
+        """
+        result = self._client.table("virtual_portfolio").update({
+            "status": "closed",
+            "exit_date": exit_date,
+            "exit_price": exit_price,
+            "exit_reason": exit_reason,
+            "realized_pnl": realized_pnl,
+            "realized_pnl_pct": realized_pnl_pct,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq(
+            "id", position_id
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def save_trade_history(
+        self,
+        strategy_mode: str,
+        symbol: str,
+        entry_date: str,
+        entry_price: float,
+        entry_score: int | None,
+        exit_date: str,
+        exit_price: float,
+        shares: float,
+        hold_days: int,
+        pnl: float,
+        pnl_pct: float,
+        exit_reason: str,
+        market_regime_at_entry: str | None = None,
+        market_regime_at_exit: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Save a completed trade to history.
+
+        Returns:
+            Inserted record
+        """
+        record = {
+            "strategy_mode": strategy_mode,
+            "symbol": symbol,
+            "entry_date": entry_date,
+            "entry_price": entry_price,
+            "exit_date": exit_date,
+            "exit_price": exit_price,
+            "shares": shares,
+            "hold_days": hold_days,
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
+            "exit_reason": exit_reason,
+        }
+
+        if entry_score is not None:
+            record["entry_score"] = entry_score
+        if market_regime_at_entry:
+            record["market_regime_at_entry"] = market_regime_at_entry
+        if market_regime_at_exit:
+            record["market_regime_at_exit"] = market_regime_at_exit
+
+        result = self._client.table("trade_history").insert(record).execute()
+        return result.data[0] if result.data else {}
+
+    def get_latest_portfolio_snapshot(
+        self,
+        strategy_mode: str,
+    ) -> dict[str, Any]:
+        """
+        Get the most recent portfolio snapshot.
+
+        Args:
+            strategy_mode: 'conservative' or 'aggressive'
+
+        Returns:
+            Latest snapshot record
+        """
+        result = self._client.table("portfolio_daily_snapshot").select("*").eq(
+            "strategy_mode", strategy_mode
+        ).order(
+            "snapshot_date", desc=True
+        ).limit(1).execute()
+
+        return result.data[0] if result.data else {}
+
+    def save_portfolio_snapshot(
+        self,
+        snapshot_date: str,
+        strategy_mode: str,
+        total_value: float,
+        cash_balance: float,
+        positions_value: float,
+        daily_pnl: float | None = None,
+        daily_pnl_pct: float | None = None,
+        cumulative_pnl: float | None = None,
+        cumulative_pnl_pct: float | None = None,
+        sp500_daily_pct: float | None = None,
+        sp500_cumulative_pct: float | None = None,
+        alpha: float | None = None,
+        open_positions: int = 0,
+        closed_today: int = 0,
+    ) -> dict[str, Any]:
+        """
+        Save a daily portfolio snapshot.
+
+        Returns:
+            Upserted record
+        """
+        record = {
+            "snapshot_date": snapshot_date,
+            "strategy_mode": strategy_mode,
+            "total_value": total_value,
+            "cash_balance": cash_balance,
+            "positions_value": positions_value,
+            "open_positions": open_positions,
+            "closed_today": closed_today,
+        }
+
+        if daily_pnl is not None:
+            record["daily_pnl"] = daily_pnl
+        if daily_pnl_pct is not None:
+            record["daily_pnl_pct"] = round(daily_pnl_pct, 4)
+        if cumulative_pnl is not None:
+            record["cumulative_pnl"] = cumulative_pnl
+        if cumulative_pnl_pct is not None:
+            record["cumulative_pnl_pct"] = round(cumulative_pnl_pct, 4)
+        if sp500_daily_pct is not None:
+            record["sp500_daily_pct"] = round(sp500_daily_pct, 4)
+        if sp500_cumulative_pct is not None:
+            record["sp500_cumulative_pct"] = round(sp500_cumulative_pct, 4)
+        if alpha is not None:
+            record["alpha"] = round(alpha, 4)
+
+        result = self._client.table("portfolio_daily_snapshot").upsert(
+            record,
+            on_conflict="snapshot_date,strategy_mode",
+        ).execute()
+
+        return result.data[0] if result.data else {}

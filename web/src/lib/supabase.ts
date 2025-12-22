@@ -341,3 +341,169 @@ export async function getPerformanceComparison(days: number = 30): Promise<{
     };
   }
 }
+
+/**
+ * Fetch portfolio snapshots for equity curve
+ */
+export async function getPortfolioSnapshots(strategyMode: string, days: number = 30): Promise<any[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data } = await supabase
+      .from('portfolio_daily_snapshot')
+      .select('*')
+      .eq('strategy_mode', strategyMode)
+      .gte('snapshot_date', startDate.toISOString().split('T')[0])
+      .order('snapshot_date', { ascending: true });
+
+    return data || [];
+  } catch (error) {
+    console.error('getPortfolioSnapshots error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch open positions
+ */
+export async function getOpenPositions(strategyMode?: string): Promise<any[]> {
+  try {
+    const supabase = getSupabase();
+    let query = supabase
+      .from('virtual_portfolio')
+      .select('*')
+      .eq('status', 'open')
+      .order('entry_date', { ascending: false });
+
+    if (strategyMode) {
+      query = query.eq('strategy_mode', strategyMode);
+    }
+
+    const { data } = await query;
+    return data || [];
+  } catch (error) {
+    console.error('getOpenPositions error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch trade history
+ */
+export async function getTradeHistory(days: number = 30, strategyMode?: string): Promise<any[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    let query = supabase
+      .from('trade_history')
+      .select('*')
+      .gte('exit_date', startDate.toISOString().split('T')[0])
+      .order('exit_date', { ascending: false });
+
+    if (strategyMode) {
+      query = query.eq('strategy_mode', strategyMode);
+    }
+
+    const { data } = await query;
+    return data || [];
+  } catch (error) {
+    console.error('getTradeHistory error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch scoring config (dynamic thresholds)
+ */
+export async function getScoringConfigs(): Promise<any[]> {
+  try {
+    const supabase = getSupabase();
+    const { data } = await supabase
+      .from('scoring_config')
+      .select('*');
+
+    return data || [];
+  } catch (error) {
+    console.error('getScoringConfigs error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch threshold history
+ */
+export async function getThresholdHistory(days: number = 30): Promise<any[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data } = await supabase
+      .from('threshold_history')
+      .select('*')
+      .gte('adjustment_date', startDate.toISOString().split('T')[0])
+      .order('adjustment_date', { ascending: false });
+
+    return data || [];
+  } catch (error) {
+    console.error('getThresholdHistory error:', error);
+    return [];
+  }
+}
+
+/**
+ * Get portfolio summary stats
+ */
+export async function getPortfolioSummary(strategyMode: string): Promise<{
+  totalValue: number;
+  cashBalance: number;
+  positionsValue: number;
+  openPositions: number;
+  cumulativePnlPct: number;
+  alpha: number;
+}> {
+  try {
+    const supabase = getSupabase();
+    const { data } = await supabase
+      .from('portfolio_daily_snapshot')
+      .select('*')
+      .eq('strategy_mode', strategyMode)
+      .order('snapshot_date', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!data) {
+      return {
+        totalValue: 100000,
+        cashBalance: 100000,
+        positionsValue: 0,
+        openPositions: 0,
+        cumulativePnlPct: 0,
+        alpha: 0,
+      };
+    }
+
+    return {
+      totalValue: data.total_value || 100000,
+      cashBalance: data.cash_balance || 100000,
+      positionsValue: data.positions_value || 0,
+      openPositions: data.open_positions || 0,
+      cumulativePnlPct: data.cumulative_pnl_pct || 0,
+      alpha: data.alpha || 0,
+    };
+  } catch (error) {
+    console.error('getPortfolioSummary error:', error);
+    return {
+      totalValue: 100000,
+      cashBalance: 100000,
+      positionsValue: 0,
+      openPositions: 0,
+      cumulativePnlPct: 0,
+      alpha: 0,
+    };
+  }
+}

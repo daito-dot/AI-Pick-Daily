@@ -7,8 +7,11 @@ Evening batch job that:
 2. Identifies missed opportunities
 3. Generates AI reflection using Gemini
 4. Saves lessons to database
+5. **FEEDBACK LOOP**: Adjusts scoring thresholds based on performance
 
 This enables learning from what we DIDN'T recommend, not just what we did.
+The threshold adjustment creates a closed feedback loop where the system
+automatically adapts its behavior based on past performance.
 """
 import logging
 import sys
@@ -24,6 +27,11 @@ from src.data.finnhub_client import FinnhubClient
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
 from src.data.supabase_client import SupabaseClient
 from src.llm import get_llm_client
+from src.scoring.threshold_optimizer import (
+    calculate_optimal_threshold,
+    should_apply_adjustment,
+    format_adjustment_log,
+)
 
 # Setup logging
 log_dir = Path("logs")
@@ -80,6 +88,7 @@ def calculate_all_returns(
     yf_client: YFinanceClient,
     supabase: SupabaseClient,
     days_ago: int = 5,
+    return_field: str = "5d",
 ) -> dict:
     """
     Calculate returns for ALL scored stocks from N days ago.
@@ -89,12 +98,13 @@ def calculate_all_returns(
         yf_client: yfinance client
         supabase: Supabase client
         days_ago: Number of days to look back
+        return_field: Which return field to update ("1d" or "5d")
 
     Returns:
         Dict with results summary
     """
     check_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
-    logger.info(f"Calculating returns for ALL stocks from {check_date}")
+    logger.info(f"Calculating {return_field} returns for ALL stocks from {check_date}")
 
     # Get ALL scores from that date
     all_scores = supabase.get_scores_for_review(check_date)
@@ -154,14 +164,20 @@ def calculate_all_returns(
         return_pct = ((current_price - original_price) / original_price) * 100
         was_picked = symbol in picks_data.get(strategy, set())
 
-        updates.append({
+        # Build update dict based on return_field
+        update_entry = {
             "batch_date": check_date,
             "symbol": symbol,
             "strategy_mode": strategy,
-            "return_5d": return_pct,
-            "price_5d": current_price,
             "was_picked": was_picked,
-        })
+        }
+        if return_field == "1d":
+            update_entry["return_1d"] = return_pct
+            update_entry["price_1d"] = current_price
+        else:
+            update_entry["return_5d"] = return_pct
+            update_entry["price_5d"] = current_price
+        updates.append(update_entry)
 
         result_entry = {
             "symbol": symbol,
@@ -306,6 +322,95 @@ def save_ai_lesson(
         logger.error(f"Failed to save AI lesson: {e}")
 
 
+def adjust_thresholds(supabase: SupabaseClient, results: dict):
+    """
+    FEEDBACK LOOP: Analyze performance and adjust thresholds.
+
+    This is the core of the closed feedback loop:
+    1. Get current thresholds from scoring_config
+    2. Analyze missed opportunities and picked performance
+    3. Calculate optimal threshold adjustment
+    4. Update scoring_config if adjustment is warranted
+    5. Record change in threshold_history for audit
+    """
+    if results.get("error"):
+        logger.info("No data for threshold adjustment")
+        return
+
+    picked = results.get("picked_returns", [])
+    not_picked = results.get("not_picked_returns", [])
+    missed = results.get("missed_opportunities", [])
+
+    # Process each strategy separately
+    for strategy in ["conservative", "aggressive"]:
+        try:
+            # Get current config
+            config = supabase.get_scoring_config(strategy)
+            if not config:
+                logger.warning(f"No scoring_config found for {strategy}, skipping")
+                continue
+
+            current_threshold = float(config.get("threshold", 60 if strategy == "conservative" else 75))
+            min_threshold = float(config.get("min_threshold", 40))
+            max_threshold = float(config.get("max_threshold", 90))
+
+            # Filter by strategy
+            strategy_picked = [p for p in picked if p.get("strategy") == strategy]
+            strategy_not_picked = [p for p in not_picked if p.get("strategy") == strategy]
+            strategy_missed = [m for m in missed if m.get("strategy") == strategy]
+
+            # Calculate optimal threshold
+            analysis = calculate_optimal_threshold(
+                current_threshold=current_threshold,
+                missed_opportunities=strategy_missed,
+                picked_performance=strategy_picked,
+                not_picked_performance=strategy_not_picked,
+                strategy_mode=strategy,
+                min_threshold=min_threshold,
+                max_threshold=max_threshold,
+            )
+
+            # Log the analysis
+            logger.info(format_adjustment_log(analysis))
+
+            # Determine if we should apply the adjustment
+            if should_apply_adjustment(analysis):
+                # Update the threshold
+                logger.info(
+                    f"APPLYING THRESHOLD CHANGE: {strategy} "
+                    f"{current_threshold} -> {analysis.recommended_threshold}"
+                )
+
+                supabase.update_threshold(
+                    strategy_mode=strategy,
+                    new_threshold=analysis.recommended_threshold,
+                    reason=analysis.reason,
+                )
+
+                # Record in history
+                supabase.save_threshold_history(
+                    strategy_mode=strategy,
+                    old_threshold=current_threshold,
+                    new_threshold=analysis.recommended_threshold,
+                    reason=analysis.reason,
+                    missed_opportunities_count=analysis.missed_count,
+                    missed_avg_return=analysis.missed_avg_return,
+                    missed_avg_score=analysis.missed_avg_score,
+                    picked_count=analysis.picked_count,
+                    picked_avg_return=analysis.picked_avg_return,
+                    not_picked_count=analysis.not_picked_count,
+                    not_picked_avg_return=analysis.not_picked_avg_return,
+                    wfe_score=analysis.wfe_score,
+                )
+
+                logger.info(f"Threshold change recorded for {strategy}")
+            else:
+                logger.info(f"No threshold change needed for {strategy}")
+
+        except Exception as e:
+            logger.error(f"Failed to adjust threshold for {strategy}: {e}")
+
+
 def main():
     """Main review pipeline."""
     logger.info("=" * 60)
@@ -325,7 +430,7 @@ def main():
 
     # 1. Calculate returns for ALL stocks (5-day review)
     logger.info("Step 1: Calculating 5-day returns for ALL scored stocks...")
-    results_5d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=5)
+    results_5d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=5, return_field="5d")
 
     if results_5d.get("error"):
         logger.warning(f"No data for 5-day review: {results_5d}")
@@ -349,7 +454,7 @@ def main():
 
     # 2. Also do 1-day review (for faster feedback)
     logger.info("Step 2: Calculating 1-day returns for ALL scored stocks...")
-    results_1d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=1)
+    results_1d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=1, return_field="1d")
 
     # 3. Generate AI reflection (focus on 5-day results)
     if not results_5d.get("error"):
@@ -367,8 +472,12 @@ def main():
             today,
         )
 
-    # 5. Get and log performance summary
-    logger.info("Step 5: Getting overall performance summary...")
+        # 5. FEEDBACK LOOP: Adjust thresholds based on performance
+        logger.info("Step 5: Analyzing and adjusting thresholds (FEEDBACK LOOP)...")
+        adjust_thresholds(supabase, results_5d)
+
+    # 6. Get and log performance summary
+    logger.info("Step 6: Getting overall performance summary...")
     for strategy in ["conservative", "aggressive"]:
         summary = supabase.get_performance_summary(days=30, strategy_mode=strategy)
         logger.info(f"\n{strategy.upper()} Summary (30 days):")
