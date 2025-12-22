@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""
+Weekly Reflection Script
+
+Runs weekly reflection analysis for both strategies:
+1. Collects past week's judgments with outcomes
+2. Analyzes patterns (success and failure)
+3. Generates improvement suggestions
+4. Saves results to database
+
+Recommended to run every Sunday evening.
+"""
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.config import config
+from src.reflection import ReflectionService
+
+# Setup logging
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.DEBUG if config.debug else logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(log_dir / f"reflection_{datetime.now().strftime('%Y%m%d')}.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+def main():
+    """Run weekly reflection for both strategies."""
+    logger.info("=" * 50)
+    logger.info("Starting weekly reflection analysis")
+    logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
+    logger.info("=" * 50)
+
+    # Check if reflection is enabled
+    if not config.llm.enable_reflection:
+        logger.info("Reflection is disabled in config, exiting")
+        return
+
+    try:
+        reflection_service = ReflectionService()
+    except Exception as e:
+        logger.error(f"Failed to initialize reflection service: {e}")
+        sys.exit(1)
+
+    # Run for both strategies
+    for strategy in ["conservative", "aggressive"]:
+        logger.info(f"\n{'='*30}")
+        logger.info(f"Reflecting on {strategy} strategy...")
+        logger.info(f"{'='*30}")
+
+        try:
+            result = reflection_service.run_weekly_reflection(strategy)
+
+            # Log summary
+            logger.info(f"\nResults for {strategy}:")
+            logger.info(f"  Total judgments: {result.total_judgments}")
+            logger.info(f"  Accuracy: {result.accuracy_rate:.0%}")
+            logger.info(f"  Buy accuracy: {result.buy_accuracy:.0%}" if result.buy_accuracy else "")
+            logger.info(f"  Avoid accuracy: {result.avoid_accuracy:.0%}" if result.avoid_accuracy else "")
+
+            # Log patterns
+            if result.success_patterns:
+                logger.info(f"\n  Success patterns found: {len(result.success_patterns)}")
+                for p in result.success_patterns[:3]:
+                    logger.info(f"    - {p.description}")
+
+            if result.failure_patterns:
+                logger.info(f"\n  Failure patterns found: {len(result.failure_patterns)}")
+                for p in result.failure_patterns[:3]:
+                    logger.info(f"    - {p.description}")
+
+            # Log top suggestions
+            top_suggestions = result.get_top_suggestions(3)
+            if top_suggestions:
+                logger.info(f"\n  Top improvement suggestions:")
+                for s in top_suggestions:
+                    logger.info(f"    [{s.priority.upper()}] {s.suggestion}")
+
+            # Log factor reliability
+            reliable = result.get_reliable_factors()
+            unreliable = result.get_unreliable_factors()
+            if reliable:
+                logger.info(f"\n  Reliable factors: {', '.join(f.factor_type for f in reliable)}")
+            if unreliable:
+                logger.info(f"  Unreliable factors: {', '.join(f.factor_type for f in unreliable)}")
+
+        except Exception as e:
+            logger.error(f"Reflection failed for {strategy}: {e}")
+            continue
+
+    logger.info("\n" + "=" * 50)
+    logger.info("Weekly reflection completed")
+    logger.info("=" * 50)
+
+
+if __name__ == "__main__":
+    main()

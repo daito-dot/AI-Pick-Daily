@@ -39,6 +39,11 @@ from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
 from src.scoring.composite_v2 import run_dual_scoring
 from src.portfolio import PortfolioManager
+from src.judgment import (
+    JudgmentService,
+    run_judgment_for_candidates,
+    filter_picks_by_judgment,
+)
 
 
 class DataFetchError(Exception):
@@ -485,9 +490,86 @@ def main():
     )
 
     logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
-    logger.info(f"V1 picks: {dual_result.v1_picks}")
+    logger.info(f"V1 picks (rule-based): {dual_result.v1_picks}")
     logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
-    logger.info(f"V2 picks: {dual_result.v2_picks}")
+    logger.info(f"V2 picks (rule-based): {dual_result.v2_picks}")
+
+    # 5.5. Run LLM Judgment for top candidates (Layer 2)
+    logger.info("Step 5.5: Running LLM judgment for top candidates...")
+
+    # Check if LLM judgment is enabled (can be disabled for cost savings)
+    use_llm_judgment = config.llm.enable_judgment
+
+    v1_final_picks = dual_result.v1_picks
+    v2_final_picks = dual_result.v2_picks
+
+    if use_llm_judgment:
+        try:
+            judgment_service = JudgmentService()
+
+            # Build candidate lists: (stock_data, scored_stock) sorted by composite score
+            v1_candidates = []
+            v1_score_map = {s.symbol: s for s in dual_result.v1_scores}
+            for stock_data in v1_stocks_data:
+                if stock_data.symbol in v1_score_map:
+                    v1_candidates.append((stock_data, v1_score_map[stock_data.symbol]))
+            v1_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
+
+            v2_candidates = []
+            v2_score_map = {s.symbol: s for s in dual_result.v2_scores}
+            for stock_data in v2_stocks_data:
+                if stock_data.symbol in v2_score_map:
+                    v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
+            v2_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
+
+            # Run V1 Conservative judgments
+            v1_judgments = run_judgment_for_candidates(
+                judgment_service=judgment_service,
+                finnhub=finnhub,
+                supabase=supabase,
+                candidates=v1_candidates,
+                strategy_mode="conservative",
+                market_regime=market_regime.regime.value,
+                batch_date=today,
+                top_n=10,  # Judge top 10 candidates
+            )
+
+            # Filter V1 picks using LLM judgment
+            v1_final_picks = filter_picks_by_judgment(
+                rule_based_picks=dual_result.v1_picks,
+                judgments=v1_judgments,
+                min_confidence=0.6,  # Conservative requires 60% confidence
+            )
+
+            # Run V2 Aggressive judgments
+            v2_judgments = run_judgment_for_candidates(
+                judgment_service=judgment_service,
+                finnhub=finnhub,
+                supabase=supabase,
+                candidates=v2_candidates,
+                strategy_mode="aggressive",
+                market_regime=market_regime.regime.value,
+                batch_date=today,
+                top_n=10,
+            )
+
+            # Filter V2 picks using LLM judgment
+            v2_final_picks = filter_picks_by_judgment(
+                rule_based_picks=dual_result.v2_picks,
+                judgments=v2_judgments,
+                min_confidence=0.5,  # Aggressive allows 50% confidence
+            )
+
+            logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
+            logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
+
+        except Exception as e:
+            logger.error(f"LLM judgment failed, using rule-based picks: {e}")
+            # Fall back to rule-based picks
+            v1_final_picks = dual_result.v1_picks
+            v2_final_picks = dual_result.v2_picks
+    else:
+        logger.info("LLM judgment disabled, using rule-based picks only")
 
     # 6. Save results for both strategies
     logger.info("Step 6: Saving results...")
@@ -549,21 +631,21 @@ def main():
     ]
     supabase.save_stock_scores(v2_stock_scores)
 
-    # Save V1 daily picks
+    # Save V1 daily picks (using LLM-filtered picks if available)
     supabase.save_daily_picks(DailyPick(
         batch_date=today,
-        symbols=dual_result.v1_picks,
-        pick_count=len(dual_result.v1_picks),
+        symbols=v1_final_picks,
+        pick_count=len(v1_final_picks),
         market_regime=market_regime.regime.value,
         strategy_mode="conservative",
         status="published",
     ))
 
-    # Save V2 daily picks
+    # Save V2 daily picks (using LLM-filtered picks if available)
     supabase.save_daily_picks(DailyPick(
         batch_date=today,
-        symbols=dual_result.v2_picks,
-        pick_count=len(dual_result.v2_picks),
+        symbols=v2_final_picks,
+        pick_count=len(v2_final_picks),
         market_regime=market_regime.regime.value,
         strategy_mode="aggressive",
         status="published",
@@ -587,20 +669,20 @@ def main():
         v1_score_dict = {s.symbol: s.composite_score for s in dual_result.v1_scores}
         v2_score_dict = {s.symbol: s.composite_score for s in dual_result.v2_scores}
 
-        # Open positions for V1 Conservative
-        if dual_result.v1_picks:
+        # Open positions for V1 Conservative (using LLM-filtered picks)
+        if v1_final_picks:
             v1_opened = portfolio.open_positions_for_picks(
-                picks=dual_result.v1_picks,
+                picks=v1_final_picks,
                 strategy_mode="conservative",
                 scores=v1_score_dict,
                 prices=prices,
             )
             logger.info(f"V1 opened {len(v1_opened)} positions")
 
-        # Open positions for V2 Aggressive
-        if dual_result.v2_picks:
+        # Open positions for V2 Aggressive (using LLM-filtered picks)
+        if v2_final_picks:
             v2_opened = portfolio.open_positions_for_picks(
-                picks=dual_result.v2_picks,
+                picks=v2_final_picks,
                 strategy_mode="aggressive",
                 scores=v2_score_dict,
                 prices=prices,
@@ -639,8 +721,11 @@ def main():
 
     logger.info("=" * 50)
     logger.info("Daily scoring batch completed successfully")
-    logger.info(f"V1 Conservative Picks: {dual_result.v1_picks}")
-    logger.info(f"V2 Aggressive Picks: {dual_result.v2_picks}")
+    logger.info(f"V1 Conservative Picks (final): {v1_final_picks}")
+    logger.info(f"V2 Aggressive Picks (final): {v2_final_picks}")
+    if use_llm_judgment:
+        logger.info(f"  (Rule-based V1: {dual_result.v1_picks})")
+        logger.info(f"  (Rule-based V2: {dual_result.v2_picks})")
     logger.info("=" * 50)
 
 

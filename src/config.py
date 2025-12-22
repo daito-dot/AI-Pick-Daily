@@ -53,9 +53,15 @@ class LLMConfig:
     """LLM-related configuration."""
     provider: Literal["gemini", "claude"] = "gemini"
     scoring_model: str = "gemini-2.5-flash-lite"
-    analysis_model: str = "gemini-3-flash"
+    analysis_model: str = "gemini-3-flash"  # For judgment (Layer 2)
+    reflection_model: str = "gemini-2.5-pro"  # For reflection (Layer 3)
+    deep_research_model: str = "gemini-2.5-pro"  # For deep research (Layer 4)
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
+    # Feature flags
+    enable_judgment: bool = True  # Enable LLM-based judgment (Layer 2)
+    enable_reflection: bool = True  # Enable reflection analysis (Layer 3)
+    judgment_thinking_budget: int = 4096  # Token budget for CoT reasoning
 
 
 @dataclass
@@ -94,8 +100,13 @@ def load_config() -> Config:
             provider=os.getenv("LLM_PROVIDER", "gemini"),  # type: ignore
             scoring_model=os.getenv("SCORING_MODEL", "gemini-2.5-flash-lite"),
             analysis_model=os.getenv("ANALYSIS_MODEL", "gemini-3-flash"),
+            reflection_model=os.getenv("REFLECTION_MODEL", "gemini-2.5-pro"),
+            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", "gemini-2.5-pro"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+            enable_judgment=os.getenv("ENABLE_JUDGMENT", "true").lower() == "true",
+            enable_reflection=os.getenv("ENABLE_REFLECTION", "true").lower() == "true",
+            judgment_thinking_budget=int(os.getenv("JUDGMENT_THINKING_BUDGET", "4096")),
         ),
         finnhub=FinnhubConfig(
             api_key=os.getenv("FINNHUB_API_KEY"),

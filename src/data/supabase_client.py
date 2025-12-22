@@ -883,3 +883,288 @@ class SupabaseClient:
         ).execute()
 
         return result.data[0] if result.data else {}
+
+    # ============ Judgment Records (Layer 2) ============
+
+    def save_judgment_record(
+        self,
+        symbol: str,
+        batch_date: str,
+        strategy_mode: str,
+        decision: str,
+        confidence: float,
+        score: int,
+        reasoning: dict[str, Any],
+        key_factors: list[dict[str, Any]],
+        identified_risks: list[str],
+        market_regime: str,
+        input_summary: str,
+        model_version: str,
+        prompt_version: str,
+        raw_llm_response: str | None = None,
+        judged_at: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Save an LLM judgment record to the database.
+
+        Args:
+            symbol: Stock ticker symbol
+            batch_date: Date of the judgment (YYYY-MM-DD)
+            strategy_mode: 'conservative' or 'aggressive'
+            decision: 'buy', 'hold', or 'avoid'
+            confidence: Model confidence (0.0-1.0)
+            score: Composite score (0-100)
+            reasoning: Reasoning trace dict
+            key_factors: List of key factor dicts
+            identified_risks: List of risk descriptions
+            market_regime: Market regime at judgment time
+            input_summary: Brief summary of input data
+            model_version: Model used for judgment
+            prompt_version: Prompt version used
+            raw_llm_response: Optional raw response for debugging
+            judged_at: Optional timestamp (uses now if not provided)
+
+        Returns:
+            Inserted record
+        """
+        import json
+
+        record = {
+            "symbol": symbol,
+            "batch_date": batch_date,
+            "strategy_mode": strategy_mode,
+            "decision": decision,
+            "confidence": round(confidence, 4),
+            "score": score,
+            "reasoning": json.dumps(reasoning) if isinstance(reasoning, dict) else reasoning,
+            "key_factors": json.dumps(key_factors) if isinstance(key_factors, list) else key_factors,
+            "identified_risks": json.dumps(identified_risks) if isinstance(identified_risks, list) else identified_risks,
+            "market_regime": market_regime,
+            "input_summary": input_summary,
+            "model_version": model_version,
+            "prompt_version": prompt_version,
+        }
+
+        if raw_llm_response:
+            record["raw_llm_response"] = raw_llm_response
+        if judged_at:
+            record["judged_at"] = judged_at
+
+        result = self._client.table("judgment_records").upsert(
+            record,
+            on_conflict="symbol,batch_date,strategy_mode",
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def get_judgment_records(
+        self,
+        batch_date: str | None = None,
+        symbol: str | None = None,
+        strategy_mode: str | None = None,
+        decision: str | None = None,
+        min_confidence: float | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Get judgment records with optional filters.
+
+        Args:
+            batch_date: Optional date filter
+            symbol: Optional symbol filter
+            strategy_mode: Optional strategy filter
+            decision: Optional decision filter
+            min_confidence: Optional minimum confidence filter
+            limit: Maximum records to return
+
+        Returns:
+            List of judgment records
+        """
+        query = self._client.table("judgment_records").select("*")
+
+        if batch_date:
+            query = query.eq("batch_date", batch_date)
+        if symbol:
+            query = query.eq("symbol", symbol)
+        if strategy_mode:
+            query = query.eq("strategy_mode", strategy_mode)
+        if decision:
+            query = query.eq("decision", decision)
+        if min_confidence is not None:
+            query = query.gte("confidence", min_confidence)
+
+        result = query.order("batch_date", desc=True).limit(limit).execute()
+        return result.data or []
+
+    def get_recent_judgments_for_reflection(
+        self,
+        strategy_mode: str,
+        days: int = 7,
+    ) -> list[dict[str, Any]]:
+        """
+        Get recent judgments for reflection analysis.
+
+        Args:
+            strategy_mode: Strategy to analyze
+            days: Number of days to look back
+
+        Returns:
+            List of judgment records with outcome data
+        """
+        from datetime import date, timedelta
+
+        start_date = (date.today() - timedelta(days=days)).isoformat()
+
+        result = self._client.table("judgment_records").select(
+            "*, judgment_outcomes(*)"
+        ).eq(
+            "strategy_mode", strategy_mode
+        ).gte(
+            "batch_date", start_date
+        ).order(
+            "batch_date", desc=True
+        ).execute()
+
+        return result.data or []
+
+    def save_judgment_outcome(
+        self,
+        judgment_id: str,
+        outcome_date: str,
+        actual_return_1d: float | None = None,
+        actual_return_5d: float | None = None,
+        actual_return_10d: float | None = None,
+        outcome_aligned: bool | None = None,
+        key_factors_validated: dict[str, Any] | None = None,
+        missed_factors: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Save outcome data for a judgment.
+
+        Args:
+            judgment_id: UUID of the judgment record
+            outcome_date: Date of the outcome measurement
+            actual_return_1d: 1-day return
+            actual_return_5d: 5-day return
+            actual_return_10d: 10-day return
+            outcome_aligned: Whether outcome matched prediction
+            key_factors_validated: Which factors proved correct
+            missed_factors: Factors that were missed
+
+        Returns:
+            Inserted/updated record
+        """
+        import json
+
+        record: dict[str, Any] = {
+            "judgment_id": judgment_id,
+            "outcome_date": outcome_date,
+        }
+
+        if actual_return_1d is not None:
+            record["actual_return_1d"] = round(actual_return_1d, 4)
+        if actual_return_5d is not None:
+            record["actual_return_5d"] = round(actual_return_5d, 4)
+        if actual_return_10d is not None:
+            record["actual_return_10d"] = round(actual_return_10d, 4)
+        if outcome_aligned is not None:
+            record["outcome_aligned"] = outcome_aligned
+        if key_factors_validated is not None:
+            record["key_factors_validated"] = json.dumps(key_factors_validated)
+        if missed_factors is not None:
+            record["missed_factors"] = json.dumps(missed_factors)
+
+        result = self._client.table("judgment_outcomes").upsert(
+            record,
+            on_conflict="judgment_id,outcome_date",
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def save_reflection_record(
+        self,
+        reflection_date: str,
+        strategy_mode: str,
+        reflection_type: str,
+        period_start: str,
+        period_end: str,
+        total_judgments: int,
+        correct_judgments: int,
+        accuracy_rate: float,
+        patterns_identified: dict[str, Any],
+        improvement_suggestions: list[dict[str, Any]],
+        model_version: str,
+        raw_llm_response: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Save a reflection analysis record.
+
+        Args:
+            reflection_date: Date of reflection
+            strategy_mode: Strategy being reflected on
+            reflection_type: 'weekly', 'monthly', or 'post_trade'
+            period_start: Start of analysis period
+            period_end: End of analysis period
+            total_judgments: Total judgments in period
+            correct_judgments: Number of correct judgments
+            accuracy_rate: Accuracy percentage (0.0-1.0)
+            patterns_identified: Pattern analysis results
+            improvement_suggestions: List of suggestions
+            model_version: Model used for reflection
+            raw_llm_response: Optional raw response
+
+        Returns:
+            Inserted record
+        """
+        import json
+
+        record = {
+            "reflection_date": reflection_date,
+            "strategy_mode": strategy_mode,
+            "reflection_type": reflection_type,
+            "period_start": period_start,
+            "period_end": period_end,
+            "total_judgments": total_judgments,
+            "correct_judgments": correct_judgments,
+            "accuracy_rate": round(accuracy_rate, 4),
+            "patterns_identified": json.dumps(patterns_identified),
+            "improvement_suggestions": json.dumps(improvement_suggestions),
+            "model_version": model_version,
+        }
+
+        if raw_llm_response:
+            record["raw_llm_response"] = raw_llm_response
+
+        result = self._client.table("reflection_records").upsert(
+            record,
+            on_conflict="reflection_date,strategy_mode,reflection_type",
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def get_reflection_records(
+        self,
+        strategy_mode: str | None = None,
+        reflection_type: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Get reflection records with optional filters.
+
+        Args:
+            strategy_mode: Optional strategy filter
+            reflection_type: Optional type filter
+            limit: Maximum records to return
+
+        Returns:
+            List of reflection records
+        """
+        query = self._client.table("reflection_records").select("*")
+
+        if strategy_mode:
+            query = query.eq("strategy_mode", strategy_mode)
+        if reflection_type:
+            query = query.eq("reflection_type", reflection_type)
+
+        result = query.order("reflection_date", desc=True).limit(limit).execute()
+        return result.data or []
