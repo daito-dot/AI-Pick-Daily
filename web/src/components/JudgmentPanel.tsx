@@ -61,7 +61,7 @@ function FactorTypeIcon({ type }: { type: string }) {
 }
 
 function KeyFactorsList({ factors }: { factors: KeyFactor[] }) {
-  if (!factors || factors.length === 0) {
+  if (!factors || !Array.isArray(factors) || factors.length === 0) {
     return <p className="text-gray-400 text-sm italic">ファクターデータなし</p>;
   }
 
@@ -119,7 +119,7 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
           )}
 
           {/* Top Factors */}
-          {reasoning.top_factors && reasoning.top_factors.length > 0 && (
+          {Array.isArray(reasoning.top_factors) && reasoning.top_factors.length > 0 && (
             <div>
               <p className="font-medium text-gray-700">主要因:</p>
               <ul className="list-disc list-inside text-gray-600 ml-2">
@@ -131,7 +131,7 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
           )}
 
           {/* Uncertainties */}
-          {reasoning.uncertainties && reasoning.uncertainties.length > 0 && (
+          {Array.isArray(reasoning.uncertainties) && reasoning.uncertainties.length > 0 && (
             <div>
               <p className="font-medium text-orange-700">不確実性:</p>
               <ul className="list-disc list-inside text-orange-600 ml-2">
@@ -143,7 +143,7 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
           )}
 
           {/* Reasoning Steps */}
-          {reasoning.steps && reasoning.steps.length > 0 && (
+          {Array.isArray(reasoning.steps) && reasoning.steps.length > 0 && (
             <div>
               <p className="font-medium text-gray-700">推論ステップ:</p>
               <ol className="list-decimal list-inside text-gray-600 ml-2 space-y-1">
@@ -225,14 +225,18 @@ function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
           </div>
 
           {/* Identified Risks */}
-          {judgment.identified_risks && judgment.identified_risks.length > 0 && (
+          {judgment.identified_risks && (
             <div>
               <p className="text-sm font-medium text-red-700 mb-2">識別されたリスク:</p>
-              <ul className="list-disc list-inside text-sm text-red-600 ml-2">
-                {judgment.identified_risks.map((risk, idx) => (
-                  <li key={idx}>{risk}</li>
-                ))}
-              </ul>
+              {Array.isArray(judgment.identified_risks) ? (
+                <ul className="list-disc list-inside text-sm text-red-600 ml-2">
+                  {judgment.identified_risks.map((risk, idx) => (
+                    <li key={idx}>{risk}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-red-600 ml-2">{judgment.identified_risks}</p>
+              )}
             </div>
           )}
 
