@@ -1,5 +1,6 @@
 import { getTodayPicks, getTodayJudgments, getTodayBatchStatus } from '@/lib/supabase';
 import type { MarketType } from '@/lib/supabase';
+import { getStockDisplayName } from '@/lib/jp-stocks';
 import { MarketTabs } from '@/components/MarketTabs';
 import { MarketRegimeStatus } from '@/components/MarketRegimeStatus';
 import { JudgmentPanel } from '@/components/JudgmentPanel';
@@ -67,7 +68,7 @@ function StrategySection({ strategyMode, picks, scores, isJapan = false }: Strat
           {pickedScores.map((score) => (
             <div key={score.id} className="bg-white rounded-lg p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <span className="font-bold text-lg">{score.symbol}</span>
+                <span className="font-bold text-lg">{getStockDisplayName(score.symbol)}</span>
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${
                   score.composite_score >= 75 ? 'bg-green-100 text-green-800' :
                   score.composite_score >= 60 ? 'bg-yellow-100 text-yellow-800' :
@@ -268,7 +269,7 @@ function MarketContent({
 
                   return (
                     <tr key={v1Score.id} className="border-b last:border-0">
-                      <td className="py-3 font-medium">{v1Score.symbol}</td>
+                      <td className="py-3 font-medium">{getStockDisplayName(v1Score.symbol)}</td>
                       <td className="py-3 text-center">{v1Score.composite_score}</td>
                       <td className="py-3 text-center">{v2Score?.composite_score ?? '-'}</td>
                       <td className={`py-3 text-center font-medium ${
