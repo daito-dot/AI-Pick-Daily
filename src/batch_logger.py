@@ -259,9 +259,25 @@ class BatchLogger:
 
     @staticmethod
     def _insert_log(ctx: BatchExecutionContext, status: ExecutionStatus) -> None:
-        """Insert initial log record."""
+        """Insert initial log record, cleaning up stale running records first."""
         try:
             supabase = _get_supabase_client()
+
+            # Clean up any stale 'running' records for this batch_date and batch_type
+            # This handles cases where a previous run crashed without updating status
+            supabase.table("batch_execution_logs").update({
+                "status": ExecutionStatus.FAILED.value,
+                "error_message": "Replaced by new run (previous run did not complete)",
+                "completed_at": datetime.utcnow().isoformat(),
+            }).eq(
+                "batch_date", ctx.batch_date
+            ).eq(
+                "batch_type", ctx.batch_type.value
+            ).eq(
+                "status", ExecutionStatus.RUNNING.value
+            ).execute()
+
+            # Now insert the new record
             supabase.table("batch_execution_logs").insert({
                 "id": ctx.id,
                 "batch_date": ctx.batch_date,
