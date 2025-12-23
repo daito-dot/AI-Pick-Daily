@@ -241,18 +241,6 @@ def fetch_stock_data_jp(
         return None, None
 
 
-def calculate_volatility(prices: list[float]) -> float:
-    """Calculate annualized volatility from daily prices."""
-    if len(prices) < 2:
-        return 0.02
-    returns = [(prices[i] / prices[i-1]) - 1 for i in range(1, len(prices))]
-    import math
-    mean_return = sum(returns) / len(returns)
-    variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
-    daily_vol = math.sqrt(variance)
-    return daily_vol * math.sqrt(252)
-
-
 def save_results_jp(
     supabase: SupabaseClient,
     batch_date: str,
