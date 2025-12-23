@@ -29,6 +29,12 @@ from src.scoring.market_regime import decide_market_regime, calculate_sma, calcu
 from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
 from src.scoring.composite_v2 import run_dual_scoring
+from src.portfolio import PortfolioManager
+from src.judgment import (
+    JudgmentService,
+    run_judgment_for_candidates,
+    filter_picks_by_judgment,
+)
 from src.batch_logger import BatchLogger, BatchType
 from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
 
@@ -454,24 +460,126 @@ def main():
         if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
             error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)"
             logger.error(f"FATAL: {error_msg}")
+            batch_ctx.failed_items = len(failed_symbols)
+            batch_ctx.successful_items = len(v1_stocks_data)
             BatchLogger.finish(batch_ctx, error=error_msg)
             sys.exit(1)
 
-        # Step 3: Run dual scoring (same as US version)
-        logger.info("Step 3: Running dual scoring pipeline...")
+        # Step 3: Fetch dynamic thresholds from database (FEEDBACK LOOP)
+        logger.info("Step 3: Fetching dynamic thresholds from scoring_config...")
+        try:
+            v1_config = supabase.get_scoring_config("jp_conservative")
+            v2_config = supabase.get_scoring_config("jp_aggressive")
+            v1_threshold = int(v1_config.get("threshold", 60)) if v1_config else None
+            v2_threshold = int(v2_config.get("threshold", 75)) if v2_config else None
+            logger.info(f"Dynamic thresholds: V1={v1_threshold}, V2={v2_threshold}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch dynamic thresholds, using defaults: {e}")
+            v1_threshold = None
+            v2_threshold = None
+
+        # Step 4: Run dual scoring (V1 Conservative + V2 Aggressive)
+        logger.info("Step 4: Running dual scoring pipeline...")
         dual_result = run_dual_scoring(
             v1_stocks_data,
             v2_stocks_data,
             market_regime,
+            v1_threshold=v1_threshold,
+            v2_threshold=v2_threshold,
         )
 
         logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
-        logger.info(f"V1 picks: {dual_result.v1_picks}")
+        logger.info(f"V1 picks (rule-based): {dual_result.v1_picks}")
         logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
-        logger.info(f"V2 picks: {dual_result.v2_picks}")
+        logger.info(f"V2 picks (rule-based): {dual_result.v2_picks}")
 
-        # Step 4: Save results (same pattern as US version)
-        logger.info("Step 4: Saving results...")
+        # Step 4.5: Run LLM Judgment for top candidates (Layer 2)
+        logger.info("Step 4.5: Running LLM judgment for top candidates...")
+
+        use_llm_judgment = config.llm.enable_judgment
+        v1_final_picks = dual_result.v1_picks
+        v2_final_picks = dual_result.v2_picks
+
+        if use_llm_judgment:
+            judgment_ctx = None
+            try:
+                judgment_ctx = BatchLogger.start(
+                    BatchType.LLM_JUDGMENT,
+                    model=config.llm.analysis_model
+                )
+                judgment_service = JudgmentService()
+
+                # Build V1 candidates
+                v1_candidates = []
+                v1_score_map = {s.symbol: s for s in dual_result.v1_scores}
+                for stock_data in v1_stocks_data:
+                    if stock_data.symbol in v1_score_map:
+                        v1_candidates.append((stock_data, v1_score_map[stock_data.symbol]))
+                v1_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
+
+                # Build V2 candidates
+                v2_candidates = []
+                v2_score_map = {s.symbol: s for s in dual_result.v2_scores}
+                for stock_data in v2_stocks_data:
+                    if stock_data.symbol in v2_score_map:
+                        v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
+                v2_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
+
+                # Run V1 Conservative judgments
+                v1_judgments = run_judgment_for_candidates(
+                    judgment_service=judgment_service,
+                    finnhub=None,  # No Finnhub for JP stocks
+                    supabase=supabase,
+                    candidates=v1_candidates,
+                    strategy_mode="jp_conservative",
+                    market_regime=regime,
+                    batch_date=today,
+                    top_n=10,
+                )
+
+                v1_final_picks = filter_picks_by_judgment(
+                    rule_based_picks=dual_result.v1_picks,
+                    judgments=v1_judgments,
+                    min_confidence=0.6,
+                )
+
+                # Run V2 Aggressive judgments
+                v2_judgments = run_judgment_for_candidates(
+                    judgment_service=judgment_service,
+                    finnhub=None,
+                    supabase=supabase,
+                    candidates=v2_candidates,
+                    strategy_mode="jp_aggressive",
+                    market_regime=regime,
+                    batch_date=today,
+                    top_n=10,
+                )
+
+                v2_final_picks = filter_picks_by_judgment(
+                    rule_based_picks=dual_result.v2_picks,
+                    judgments=v2_judgments,
+                    min_confidence=0.5,
+                )
+
+                logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
+                logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
+
+                judgment_ctx.successful_items = len(v1_judgments) + len(v2_judgments)
+                judgment_ctx.total_items = 20
+                judgment_ctx.failed_items = 20 - judgment_ctx.successful_items
+                BatchLogger.finish(judgment_ctx)
+
+            except Exception as e:
+                logger.error(f"LLM judgment failed, using rule-based picks: {e}")
+                if judgment_ctx is not None:
+                    BatchLogger.finish(judgment_ctx, error=str(e))
+                v1_final_picks = dual_result.v1_picks
+                v2_final_picks = dual_result.v2_picks
+        else:
+            logger.info("LLM judgment disabled, using rule-based picks only")
+
+        # Step 5: Save results
+        logger.info("Step 5: Saving results...")
         save_results_jp(
             supabase=supabase,
             batch_date=today,
@@ -480,15 +588,102 @@ def main():
             v1_stocks_data=v1_stocks_data,
         )
 
-        # Record batch completion stats (like US version)
+        # Update daily_picks with LLM-filtered picks (overwrite rule-based)
+        if use_llm_judgment and (v1_final_picks != dual_result.v1_picks or v2_final_picks != dual_result.v2_picks):
+            supabase._client.table("daily_picks").upsert({
+                "batch_date": today,
+                "strategy_mode": "jp_conservative",
+                "symbols": v1_final_picks,
+                "pick_count": len(v1_final_picks),
+                "market_regime": regime,
+                "status": "published",
+                "market_type": "jp",
+            }, on_conflict="batch_date,strategy_mode").execute()
+            supabase._client.table("daily_picks").upsert({
+                "batch_date": today,
+                "strategy_mode": "jp_aggressive",
+                "symbols": v2_final_picks,
+                "pick_count": len(v2_final_picks),
+                "market_regime": regime,
+                "status": "published",
+                "market_type": "jp",
+            }, on_conflict="batch_date,strategy_mode").execute()
+
+        # Step 6: Paper Trading - Open positions for picks
+        logger.info("Step 6: Opening positions for paper trading...")
+
+        if market_regime.max_picks > 0:
+            portfolio = PortfolioManager(
+                supabase=supabase,
+                finnhub=None,  # No Finnhub for JP
+                yfinance=yf_client,
+            )
+
+            # Build price dict from stock data
+            prices = {d.symbol: d.open_price for d in v1_stocks_data if d.open_price > 0}
+
+            # Build score dicts
+            v1_score_dict = {s.symbol: s.composite_score for s in dual_result.v1_scores}
+            v2_score_dict = {s.symbol: s.composite_score for s in dual_result.v2_scores}
+
+            # Open positions for V1 Conservative
+            if v1_final_picks:
+                v1_opened = portfolio.open_positions_for_picks(
+                    picks=v1_final_picks,
+                    strategy_mode="jp_conservative",
+                    scores=v1_score_dict,
+                    prices=prices,
+                )
+                logger.info(f"V1 opened {len(v1_opened)} positions")
+
+            # Open positions for V2 Aggressive
+            if v2_final_picks:
+                v2_opened = portfolio.open_positions_for_picks(
+                    picks=v2_final_picks,
+                    strategy_mode="jp_aggressive",
+                    scores=v2_score_dict,
+                    prices=prices,
+                )
+                logger.info(f"V2 opened {len(v2_opened)} positions")
+
+            # Step 7: Update portfolio snapshots
+            logger.info("Step 7: Updating portfolio snapshots...")
+
+            # Get Nikkei 225 daily return for benchmark
+            nikkei_daily_pct = None
+            try:
+                import yfinance as yf
+                nikkei = yf.Ticker("^N225")
+                nikkei_hist = nikkei.history(period="5d")
+                if len(nikkei_hist) >= 2:
+                    closes = nikkei_hist["Close"].tolist()
+                    nikkei_daily_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
+                    logger.info(f"Nikkei 225 daily return: {nikkei_daily_pct:.2f}%")
+            except Exception as e:
+                logger.warning(f"Failed to get Nikkei 225 daily return: {e}")
+
+            for strategy in ["jp_conservative", "jp_aggressive"]:
+                try:
+                    portfolio.update_portfolio_snapshot(
+                        strategy_mode=strategy,
+                        sp500_daily_pct=nikkei_daily_pct,  # Using Nikkei as benchmark
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to update snapshot for {strategy}: {e}")
+
+        else:
+            logger.info("Skipping position opening - market in crisis mode")
+
+        # Record batch completion stats
         batch_ctx.successful_items = len(v1_stocks_data)
         batch_ctx.failed_items = len(failed_symbols)
         batch_ctx.total_items = len(JP_STOCK_SYMBOLS)
         batch_ctx.metadata = {
-            "v1_picks": dual_result.v1_picks,
-            "v2_picks": dual_result.v2_picks,
+            "v1_picks": v1_final_picks,
+            "v2_picks": v2_final_picks,
             "market_regime": regime,
             "market": "jp",
+            "llm_judgment_enabled": use_llm_judgment,
         }
 
         # Finish batch
@@ -496,8 +691,11 @@ def main():
 
         logger.info("=" * 60)
         logger.info("Japan Stock Daily Scoring completed successfully")
-        logger.info(f"JP Conservative Picks: {dual_result.v1_picks}")
-        logger.info(f"JP Aggressive Picks: {dual_result.v2_picks}")
+        logger.info(f"JP Conservative Picks (final): {v1_final_picks}")
+        logger.info(f"JP Aggressive Picks (final): {v2_final_picks}")
+        if use_llm_judgment:
+            logger.info(f"  (Rule-based V1: {dual_result.v1_picks})")
+            logger.info(f"  (Rule-based V2: {dual_result.v2_picks})")
         logger.info("=" * 60)
 
     except Exception as e:
