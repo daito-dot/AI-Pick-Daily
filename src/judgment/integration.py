@@ -7,12 +7,15 @@ Handles data transformation and judgment persistence.
 import logging
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from src.data.finnhub_client import FinnhubClient, NewsItem
 from src.data.supabase_client import SupabaseClient
 from .service import JudgmentService
 from .models import JudgmentOutput, KeyFactor, ReasoningTrace
+
+if TYPE_CHECKING:
+    from src.data.yfinance_client import YFinanceClient
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +79,7 @@ def fetch_news_for_judgment(
     finnhub: FinnhubClient | None,
     symbol: str,
     days: int = 7,
+    yfinance: "YFinanceClient | None" = None,
 ) -> list[dict]:
     """
     Fetch and format news for judgment.
@@ -84,12 +88,33 @@ def fetch_news_for_judgment(
         finnhub: Finnhub client (can be None for markets without Finnhub support)
         symbol: Stock symbol
         days: Days of news to fetch
+        yfinance: Optional yfinance client as fallback for markets without Finnhub
 
     Returns:
         List of news dicts formatted for judgment
     """
+    # Try yfinance first if finnhub is not available
     if finnhub is None:
-        logger.debug(f"No Finnhub client available for {symbol}, skipping news fetch")
+        if yfinance is not None:
+            logger.debug(f"Using yfinance for news: {symbol}")
+            try:
+                yf_news = yfinance.get_news(symbol, max_items=15)
+                if yf_news:
+                    news_data = []
+                    for item in yf_news:
+                        news_data.append({
+                            "headline": item.get("headline", ""),
+                            "summary": item.get("summary", "")[:500] if item.get("summary") else "",
+                            "datetime": item.get("datetime"),
+                            "source": item.get("source", "Yahoo Finance"),
+                            "sentiment": None,  # yfinance doesn't provide sentiment
+                        })
+                    logger.info(f"Fetched {len(news_data)} news items from yfinance for {symbol}")
+                    return news_data
+            except Exception as e:
+                logger.warning(f"yfinance news fetch failed for {symbol}: {e}")
+
+        logger.debug(f"No news client available for {symbol}, skipping news fetch")
         return []
 
     try:
@@ -208,6 +233,7 @@ def run_judgment_for_candidates(
     market_regime: str,
     batch_date: str,
     top_n: int = 10,
+    yfinance: "YFinanceClient | None" = None,
 ) -> list[JudgmentOutput]:
     """
     Run LLM judgment for top candidates.
@@ -221,6 +247,7 @@ def run_judgment_for_candidates(
         market_regime: Current market regime
         batch_date: Date string
         top_n: Number of top candidates to judge
+        yfinance: Optional yfinance client for news fallback (used for JP stocks)
 
     Returns:
         List of JudgmentOutput instances
@@ -238,7 +265,7 @@ def run_judgment_for_candidates(
         try:
             # Prepare data
             stock_dict = prepare_stock_data_for_judgment(stock_data)
-            news_data = fetch_news_for_judgment(finnhub, symbol)
+            news_data = fetch_news_for_judgment(finnhub, symbol, yfinance=yfinance)
             scores_dict = prepare_scores_for_judgment(score)
 
             # Generate judgment

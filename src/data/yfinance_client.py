@@ -308,6 +308,58 @@ class YFinanceClient:
             logger.error(f"yfinance failed to get financials for {symbol}: {e}")
             return None
 
+    def get_news(self, symbol: str, max_items: int = 10) -> list[dict[str, Any]]:
+        """
+        Get recent news for a stock.
+
+        Args:
+            symbol: Stock ticker symbol
+            max_items: Maximum number of news items to return
+
+        Returns:
+            List of news dicts with headline, summary, datetime, source
+        """
+        def _fetch():
+            ticker = yf.Ticker(symbol)
+            raw_news = ticker.news
+
+            if not raw_news:
+                return []
+
+            news_list = []
+            for item in raw_news[:max_items]:
+                content = item.get("content", {})
+                if not content:
+                    continue
+
+                # Parse the nested structure
+                pub_date = content.get("pubDate")
+                if pub_date:
+                    try:
+                        # Convert ISO format to timestamp
+                        dt = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
+                        timestamp = int(dt.timestamp())
+                    except (ValueError, AttributeError):
+                        timestamp = None
+                else:
+                    timestamp = None
+
+                news_list.append({
+                    "headline": content.get("title", ""),
+                    "summary": content.get("summary", "") or content.get("description", ""),
+                    "datetime": timestamp,
+                    "source": content.get("provider", {}).get("displayName", "Yahoo Finance"),
+                    "url": content.get("canonicalUrl", {}).get("url", ""),
+                })
+
+            return news_list
+
+        try:
+            return _retry_with_backoff(_fetch)
+        except Exception as e:
+            logger.warning(f"yfinance failed to get news for {symbol}: {e}")
+            return []
+
 
 # Singleton instance
 _client: YFinanceClient | None = None

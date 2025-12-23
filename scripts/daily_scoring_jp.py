@@ -528,7 +528,7 @@ def main():
                         v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
                 v2_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
 
-                # Run V1 Conservative judgments
+                # Run V1 Conservative judgments (use yfinance for news)
                 v1_judgments = run_judgment_for_candidates(
                     judgment_service=judgment_service,
                     finnhub=None,  # No Finnhub for JP stocks
@@ -538,6 +538,7 @@ def main():
                     market_regime=regime,
                     batch_date=today,
                     top_n=10,
+                    yfinance=yf_client,  # Use yfinance for news
                 )
 
                 v1_final_picks = filter_picks_by_judgment(
@@ -546,7 +547,7 @@ def main():
                     min_confidence=0.6,
                 )
 
-                # Run V2 Aggressive judgments
+                # Run V2 Aggressive judgments (use yfinance for news)
                 v2_judgments = run_judgment_for_candidates(
                     judgment_service=judgment_service,
                     finnhub=None,
@@ -556,6 +557,7 @@ def main():
                     market_regime=regime,
                     batch_date=today,
                     top_n=10,
+                    yfinance=yf_client,  # Use yfinance for news
                 )
 
                 v2_final_picks = filter_picks_by_judgment(
