@@ -72,6 +72,14 @@ def fix_portfolio_cash():
         cumulative_pnl = correct_total - INITIAL_CAPITAL
         cumulative_pnl_pct = (cumulative_pnl / INITIAL_CAPITAL) * 100
 
+        # Alpha = cumulative return - S&P500 cumulative return
+        # Since we don't track S&P500 properly yet, reset to 0
+        sp500_cumulative_pct = 0.0
+        alpha = cumulative_pnl_pct - sp500_cumulative_pct
+
+        print(f"  Cumulative PnL: {cumulative_pnl_pct:.2f}%")
+        print(f"  Alpha (vs S&P500): {alpha:.2f}%")
+
         result = supabase._client.table("portfolio_daily_snapshot").upsert({
             "snapshot_date": today,
             "strategy_mode": strategy,
@@ -80,6 +88,8 @@ def fix_portfolio_cash():
             "positions_value": positions_value,
             "cumulative_pnl": cumulative_pnl,
             "cumulative_pnl_pct": round(cumulative_pnl_pct, 4),
+            "sp500_cumulative_pct": sp500_cumulative_pct,
+            "alpha": round(alpha, 4),
             "open_positions": len(positions),
         }, on_conflict="snapshot_date,strategy_mode").execute()
 
