@@ -1,11 +1,12 @@
 import { getTodayPicks, getTodayJudgments, getTodayBatchStatus } from '@/lib/supabase';
-import { StockCard } from '@/components/StockCard';
+import type { MarketType } from '@/lib/supabase';
+import { MarketTabs } from '@/components/MarketTabs';
 import { MarketRegimeStatus } from '@/components/MarketRegimeStatus';
 import { JudgmentPanel } from '@/components/JudgmentPanel';
 import { SystemStatusPanel } from '@/components/SystemStatus';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
-import type { StockScore, StrategyModeType } from '@/types';
+import type { StockScore, StrategyModeType, MarketRegimeHistory, JudgmentRecord } from '@/types';
 
 export const revalidate = 300; // Revalidate every 5 minutes
 
@@ -13,10 +14,11 @@ interface StrategyCardProps {
   strategyMode: StrategyModeType;
   picks: string[];
   scores: StockScore[];
+  isJapan?: boolean;
 }
 
-function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
-  const isAggressive = strategyMode === 'aggressive';
+function StrategySection({ strategyMode, picks, scores, isJapan = false }: StrategyCardProps) {
+  const isAggressive = strategyMode === 'aggressive' || strategyMode === 'jp_aggressive';
   const pickedScores = scores.filter(s => picks.includes(s.symbol));
 
   const config = {
@@ -26,7 +28,6 @@ function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
       bgColor: 'bg-blue-50',
       borderColor: 'border-blue-200',
       textColor: 'text-blue-800',
-      scoreLabels: ['Trend', 'Mom', 'Value', 'Sent'],
     },
     aggressive: {
       title: 'V2: Aggressive',
@@ -34,11 +35,25 @@ function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
       bgColor: 'bg-orange-50',
       borderColor: 'border-orange-200',
       textColor: 'text-orange-800',
-      scoreLabels: ['Mom12-1', 'Break', 'Catalyst', 'Risk'],
+    },
+    jp_conservative: {
+      title: 'V1: Conservative',
+      subtitle: 'バランス型（低リスク）',
+      bgColor: 'bg-blue-50',
+      borderColor: 'border-blue-200',
+      textColor: 'text-blue-800',
+    },
+    jp_aggressive: {
+      title: 'V2: Aggressive',
+      subtitle: 'モメンタム重視（高リターン）',
+      bgColor: 'bg-orange-50',
+      borderColor: 'border-orange-200',
+      textColor: 'text-orange-800',
     },
   };
 
   const c = config[strategyMode];
+  const currencySymbol = isJapan ? '¥' : '$';
 
   return (
     <div className={`rounded-xl ${c.bgColor} ${c.borderColor} border p-6`}>
@@ -104,6 +119,12 @@ function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
                 )}
               </div>
 
+              {score.price_at_time && (
+                <p className="mt-2 text-xs text-gray-400">
+                  {currencySymbol}{isJapan ? Math.round(score.price_at_time).toLocaleString() : score.price_at_time.toFixed(2)}
+                </p>
+              )}
+
               {score.reasoning && (
                 <p className="mt-2 text-xs text-gray-500 truncate">
                   {score.reasoning}
@@ -119,39 +140,46 @@ function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
   );
 }
 
-export default async function HomePage() {
-  const [picksData, judgments, batchStatus] = await Promise.all([
-    getTodayPicks(),
-    getTodayJudgments(),
-    getTodayBatchStatus(),
-  ]);
+interface MarketContentProps {
+  conservativePicks: string[];
+  aggressivePicks: string[];
+  conservativeScores: StockScore[];
+  aggressiveScores: StockScore[];
+  regime: MarketRegimeHistory | null;
+  judgments: JudgmentRecord[];
+  isJapan?: boolean;
+  conservativeStrategyMode: StrategyModeType;
+  aggressiveStrategyMode: StrategyModeType;
+}
 
-  const {
-    conservativePicks,
-    aggressivePicks,
-    conservativeScores,
-    aggressiveScores,
-    regime,
-  } = picksData;
-
-  const today = format(new Date(), 'yyyy年MM月dd日 (E)', { locale: ja });
+function MarketContent({
+  conservativePicks,
+  aggressivePicks,
+  conservativeScores,
+  aggressiveScores,
+  regime,
+  judgments,
+  isJapan = false,
+  conservativeStrategyMode,
+  aggressiveStrategyMode,
+}: MarketContentProps) {
+  const benchmarkName = isJapan ? '日経225' : 'S&P 500';
+  const benchmarkDesc = isJapan
+    ? '日経225をベンチマークとして使用'
+    : 'S&P 500をベンチマークとして使用';
 
   return (
     <div className="space-y-8">
-      {/* Header Section */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900">本日のピック</h2>
-          <p className="text-gray-500 mt-1">{today}</p>
-        </div>
-        {regime && (
+      {/* Market Regime */}
+      {regime && (
+        <div className="flex justify-end">
           <MarketRegimeStatus
             regime={regime.market_regime}
             vixLevel={regime.vix_level}
             notes={regime.notes}
           />
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Crisis Mode Warning */}
       {regime?.market_regime === 'crisis' && (
@@ -174,14 +202,16 @@ export default async function HomePage() {
       {regime?.market_regime !== 'crisis' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <StrategySection
-            strategyMode="conservative"
-            picks={conservativePicks?.symbols || []}
+            strategyMode={conservativeStrategyMode}
+            picks={conservativePicks}
             scores={conservativeScores}
+            isJapan={isJapan}
           />
           <StrategySection
-            strategyMode="aggressive"
-            picks={aggressivePicks?.symbols || []}
+            strategyMode={aggressiveStrategyMode}
+            picks={aggressivePicks}
             scores={aggressiveScores}
+            isJapan={isJapan}
           />
         </div>
       )}
@@ -199,6 +229,9 @@ export default async function HomePage() {
             <p>モメンタム重視型。12-1モメンタム/ブレイクアウト/カタリストを40/25/20/15で評価。高リターン志向。</p>
           </div>
         </div>
+        <p className="mt-2 text-xs text-gray-400">
+          {benchmarkDesc}
+        </p>
       </div>
 
       {/* LLM Judgment Panel (Layer 2) */}
@@ -207,11 +240,6 @@ export default async function HomePage() {
           <JudgmentPanel judgments={judgments} />
         </div>
       )}
-
-      {/* System Status Panel */}
-      <div className="mt-8">
-        <SystemStatusPanel status={batchStatus} />
-      </div>
 
       {/* Full Scores Table */}
       {(conservativeScores.length > 0 || aggressiveScores.length > 0) && (
@@ -235,8 +263,8 @@ export default async function HomePage() {
                 {conservativeScores.slice(0, 10).map((v1Score) => {
                   const v2Score = aggressiveScores.find(s => s.symbol === v1Score.symbol);
                   const diff = v2Score ? v2Score.composite_score - v1Score.composite_score : 0;
-                  const isV1Pick = conservativePicks?.symbols?.includes(v1Score.symbol);
-                  const isV2Pick = aggressivePicks?.symbols?.includes(v1Score.symbol);
+                  const isV1Pick = conservativePicks.includes(v1Score.symbol);
+                  const isV2Pick = aggressivePicks.includes(v1Score.symbol);
 
                   return (
                     <tr key={v1Score.id} className="border-b last:border-0">
@@ -262,6 +290,69 @@ export default async function HomePage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+export default async function HomePage() {
+  // Fetch data for both US and Japan markets in parallel
+  const [usPicksData, jpPicksData, usJudgments, jpJudgments, batchStatus] = await Promise.all([
+    getTodayPicks('us'),
+    getTodayPicks('jp'),
+    getTodayJudgments('us'),
+    getTodayJudgments('jp'),
+    getTodayBatchStatus(),
+  ]);
+
+  const today = format(new Date(), 'yyyy年MM月dd日 (E)', { locale: ja });
+
+  // US Content
+  const usContent = (
+    <MarketContent
+      conservativePicks={usPicksData.conservativePicks?.symbols || []}
+      aggressivePicks={usPicksData.aggressivePicks?.symbols || []}
+      conservativeScores={usPicksData.conservativeScores}
+      aggressiveScores={usPicksData.aggressiveScores}
+      regime={usPicksData.regime}
+      judgments={usJudgments}
+      isJapan={false}
+      conservativeStrategyMode="conservative"
+      aggressiveStrategyMode="aggressive"
+    />
+  );
+
+  // Japan Content
+  const jpContent = (
+    <MarketContent
+      conservativePicks={jpPicksData.conservativePicks?.symbols || []}
+      aggressivePicks={jpPicksData.aggressivePicks?.symbols || []}
+      conservativeScores={jpPicksData.conservativeScores}
+      aggressiveScores={jpPicksData.aggressiveScores}
+      regime={jpPicksData.regime}
+      judgments={jpJudgments}
+      isJapan={true}
+      conservativeStrategyMode="jp_conservative"
+      aggressiveStrategyMode="jp_aggressive"
+    />
+  );
+
+  return (
+    <div className="space-y-8">
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold text-gray-900">本日のピック</h2>
+          <p className="text-gray-500 mt-1">{today}</p>
+        </div>
+      </div>
+
+      {/* Market Tabs */}
+      <MarketTabs usContent={usContent} jpContent={jpContent} />
+
+      {/* System Status Panel */}
+      <div className="mt-8">
+        <SystemStatusPanel status={batchStatus} />
+      </div>
     </div>
   );
 }

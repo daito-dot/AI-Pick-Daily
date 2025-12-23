@@ -29,10 +29,19 @@ function getSupabase(): SupabaseClient {
   return supabaseInstance;
 }
 
+// Market type for US vs Japan stocks
+export type MarketType = 'us' | 'jp';
+
+// Strategy mode mapping by market
+const STRATEGY_MODES = {
+  us: { conservative: 'conservative', aggressive: 'aggressive' },
+  jp: { conservative: 'jp_conservative', aggressive: 'jp_aggressive' },
+} as const;
+
 /**
  * Fetch today's picks with scores for both strategies
  */
-export async function getTodayPicks(): Promise<{
+export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
   conservativePicks: DailyPick | null;
   aggressivePicks: DailyPick | null;
   conservativeScores: StockScore[];
@@ -43,12 +52,14 @@ export async function getTodayPicks(): Promise<{
   try {
     const supabase = getSupabase();
     const today = new Date().toISOString().split('T')[0];
+    const modes = STRATEGY_MODES[marketType];
 
     // Get daily picks for both strategies
     const { data: allPicks, error: picksError } = await supabase
       .from('daily_picks')
       .select('*')
-      .eq('batch_date', today);
+      .eq('batch_date', today)
+      .in('strategy_mode', [modes.conservative, modes.aggressive]);
 
     if (picksError) {
       console.error('[getTodayPicks] daily_picks error:', picksError);
@@ -62,14 +73,15 @@ export async function getTodayPicks(): Promise<{
       };
     }
 
-    const conservativePicks = allPicks?.find(p => p.strategy_mode === 'conservative') || null;
-    const aggressivePicks = allPicks?.find(p => p.strategy_mode === 'aggressive') || null;
+    const conservativePicks = allPicks?.find(p => p.strategy_mode === modes.conservative) || null;
+    const aggressivePicks = allPicks?.find(p => p.strategy_mode === modes.aggressive) || null;
 
     // Get stock scores for today (both strategies)
     const { data: allScores, error: scoresError } = await supabase
       .from('stock_scores')
       .select('*')
       .eq('batch_date', today)
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
       .order('composite_score', { ascending: false });
 
     if (scoresError) {
@@ -84,8 +96,8 @@ export async function getTodayPicks(): Promise<{
       };
     }
 
-    const conservativeScores = allScores?.filter(s => s.strategy_mode === 'conservative') || [];
-    const aggressiveScores = allScores?.filter(s => s.strategy_mode === 'aggressive') || [];
+    const conservativeScores = allScores?.filter(s => s.strategy_mode === modes.conservative) || [];
+    const aggressiveScores = allScores?.filter(s => s.strategy_mode === modes.aggressive) || [];
 
     // Get market regime
     const { data: regime, error: regimeError } = await supabase
@@ -557,15 +569,17 @@ export async function getPortfolioSummary(strategyMode: string): Promise<{
 /**
  * Fetch today's LLM judgments for all stocks
  */
-export async function getTodayJudgments(): Promise<JudgmentRecord[]> {
+export async function getTodayJudgments(marketType: MarketType = 'us'): Promise<JudgmentRecord[]> {
   try {
     const supabase = getSupabase();
     const today = new Date().toISOString().split('T')[0];
+    const modes = STRATEGY_MODES[marketType];
 
     const { data, error } = await supabase
       .from('judgment_records')
       .select('*')
       .eq('batch_date', today)
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
       .order('confidence', { ascending: false });
 
     if (error) {

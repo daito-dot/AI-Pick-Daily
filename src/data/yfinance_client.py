@@ -230,6 +230,53 @@ class YFinanceClient:
             logger.error(f"yfinance failed to get S&P500 daily return: {e}")
             return None
 
+    def get_nikkei_daily_return(self) -> float | None:
+        """
+        Get Nikkei 225 daily return percentage.
+
+        Returns:
+            Daily return as percentage (e.g., 1.5 for +1.5%) or None if failed
+        """
+        def _fetch():
+            ticker = yf.Ticker("^N225")
+            hist = ticker.history(period="5d")
+            if len(hist) < 2:
+                return None
+            prev_close = float(hist["Close"].iloc[-2])
+            curr_close = float(hist["Close"].iloc[-1])
+            if prev_close <= 0:
+                return None
+            return ((curr_close - prev_close) / prev_close) * 100
+
+        try:
+            return _retry_with_backoff(_fetch)
+        except Exception as e:
+            logger.error(f"yfinance failed to get Nikkei daily return: {e}")
+            return None
+
+    def get_nikkei_price(self) -> float | None:
+        """
+        Get current Nikkei 225 price.
+
+        Returns:
+            Nikkei 225 price or None if failed
+        """
+        def _fetch():
+            ticker = yf.Ticker("^N225")
+            info = ticker.fast_info
+            price = float(info.get("lastPrice", 0) or info.get("regularMarketPrice", 0))
+            if price <= 0:
+                hist = ticker.history(period="1d")
+                if not hist.empty:
+                    price = float(hist["Close"].iloc[-1])
+            return price if price > 0 else None
+
+        try:
+            return _retry_with_backoff(_fetch)
+        except Exception as e:
+            logger.error(f"yfinance failed to get Nikkei price: {e}")
+            return None
+
     def get_basic_financials(self, symbol: str) -> dict[str, Any] | None:
         """
         Get basic financial metrics.

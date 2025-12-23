@@ -6,17 +6,32 @@ import {
   getScoringConfigs,
   getThresholdHistory,
 } from '@/lib/supabase';
+import { MarketTabs } from '@/components/MarketTabs';
 import { format, parseISO } from 'date-fns';
 import { ja } from 'date-fns/locale';
 
 export const revalidate = 300;
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('ja-JP', {
+function formatCurrency(value: number, isJapan: boolean = false): string {
+  if (isJapan) {
+    return new Intl.NumberFormat('ja-JP', {
+      style: 'currency',
+      currency: 'JPY',
+      maximumFractionDigits: 0,
+    }).format(value);
+  }
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'JPY',
+    currency: 'USD',
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function formatPrice(price: number, isJapan: boolean = false): string {
+  if (isJapan) {
+    return `¥${Math.round(price).toLocaleString()}`;
+  }
+  return `$${price.toFixed(2)}`;
 }
 
 function PnLBadge({ pnl }: { pnl: number }) {
@@ -46,37 +61,59 @@ function ExitReasonBadge({ reason }: { reason: string }) {
 }
 
 function StrategyBadge({ strategy }: { strategy: string }) {
-  const isConservative = strategy === 'conservative';
+  const isConservative = strategy === 'conservative' || strategy === 'jp_conservative';
+  const isJapan = strategy.startsWith('jp_');
+  const label = isConservative ? 'V1' : 'V2';
+  const marketLabel = isJapan ? '🇯🇵' : '🇺🇸';
+
   return (
     <span className={`px-2 py-1 rounded text-xs font-medium ${
       isConservative ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'
     }`}>
-      {isConservative ? 'V1' : 'V2'}
+      {marketLabel} {label}
     </span>
   );
 }
 
-export default async function PortfolioPage() {
-  const [
-    v1Summary,
-    v2Summary,
-    openPositions,
-    trades,
-    v1Snapshots,
-    v2Snapshots,
-    configs,
-    thresholdHistory,
-  ] = await Promise.all([
-    getPortfolioSummary('conservative'),
-    getPortfolioSummary('aggressive'),
-    getOpenPositions(),
-    getTradeHistory(30),
-    getPortfolioSnapshots('conservative', 30),
-    getPortfolioSnapshots('aggressive', 30),
-    getScoringConfigs(),
-    getThresholdHistory(30),
-  ]);
+interface PortfolioContentProps {
+  v1Summary: {
+    totalValue: number;
+    cashBalance: number;
+    positionsValue: number;
+    openPositions: number;
+    cumulativePnlPct: number;
+    alpha: number;
+  };
+  v2Summary: {
+    totalValue: number;
+    cashBalance: number;
+    positionsValue: number;
+    openPositions: number;
+    cumulativePnlPct: number;
+    alpha: number;
+  };
+  openPositions: any[];
+  trades: any[];
+  v1Config: any;
+  v2Config: any;
+  thresholdHistory: any[];
+  isJapan: boolean;
+  v1Strategy: string;
+  v2Strategy: string;
+}
 
+function PortfolioContent({
+  v1Summary,
+  v2Summary,
+  openPositions,
+  trades,
+  v1Config,
+  v2Config,
+  thresholdHistory,
+  isJapan,
+  v1Strategy,
+  v2Strategy,
+}: PortfolioContentProps) {
   // Calculate trade stats
   const totalTrades = trades.length;
   const winningTrades = trades.filter(t => t.pnl_pct > 0).length;
@@ -85,16 +122,12 @@ export default async function PortfolioPage() {
     ? (trades.reduce((sum, t) => sum + (t.pnl_pct || 0), 0) / totalTrades).toFixed(2)
     : '---';
 
-  // Get current thresholds
-  const v1Config = configs.find(c => c.strategy_mode === 'conservative');
-  const v2Config = configs.find(c => c.strategy_mode === 'aggressive');
+  const benchmarkName = isJapan ? '日経225' : 'S&P500';
+  const initialFund = isJapan ? '¥100,000' : '$100,000';
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-3xl font-bold text-gray-900">ポートフォリオ</h2>
-        <p className="text-gray-500 mt-1">仮想運用シミュレーション（初期資金: ¥100,000）</p>
-      </div>
+      <p className="text-gray-500 mt-1">仮想運用シミュレーション（初期資金: {initialFund}）</p>
 
       {/* Portfolio Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -102,20 +135,20 @@ export default async function PortfolioPage() {
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">V1 Conservative</h3>
-            <StrategyBadge strategy="conservative" />
+            <StrategyBadge strategy={v1Strategy} />
           </div>
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-gray-500">総資産</span>
-              <span className="font-bold">{formatCurrency(v1Summary.totalValue)}</span>
+              <span className="font-bold">{formatCurrency(v1Summary.totalValue, isJapan)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">現金</span>
-              <span>{formatCurrency(v1Summary.cashBalance)}</span>
+              <span>{formatCurrency(v1Summary.cashBalance, isJapan)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">ポジション価値</span>
-              <span>{formatCurrency(v1Summary.positionsValue)}</span>
+              <span>{formatCurrency(v1Summary.positionsValue, isJapan)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">保有銘柄数</span>
@@ -127,7 +160,7 @@ export default async function PortfolioPage() {
               <PnLBadge pnl={v1Summary.cumulativePnlPct} />
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">Alpha (vs S&P500)</span>
+              <span className="text-gray-500">Alpha (vs {benchmarkName})</span>
               <PnLBadge pnl={v1Summary.alpha} />
             </div>
           </div>
@@ -137,20 +170,20 @@ export default async function PortfolioPage() {
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">V2 Aggressive</h3>
-            <StrategyBadge strategy="aggressive" />
+            <StrategyBadge strategy={v2Strategy} />
           </div>
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-gray-500">総資産</span>
-              <span className="font-bold">{formatCurrency(v2Summary.totalValue)}</span>
+              <span className="font-bold">{formatCurrency(v2Summary.totalValue, isJapan)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">現金</span>
-              <span>{formatCurrency(v2Summary.cashBalance)}</span>
+              <span>{formatCurrency(v2Summary.cashBalance, isJapan)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">ポジション価値</span>
-              <span>{formatCurrency(v2Summary.positionsValue)}</span>
+              <span>{formatCurrency(v2Summary.positionsValue, isJapan)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">保有銘柄数</span>
@@ -162,7 +195,7 @@ export default async function PortfolioPage() {
               <PnLBadge pnl={v2Summary.cumulativePnlPct} />
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">Alpha (vs S&P500)</span>
+              <span className="text-gray-500">Alpha (vs {benchmarkName})</span>
               <PnLBadge pnl={v2Summary.alpha} />
             </div>
           </div>
@@ -279,9 +312,9 @@ export default async function PortfolioPage() {
                     <td className="py-3 text-sm text-gray-600">
                       {format(parseISO(pos.entry_date), 'MM/dd', { locale: ja })}
                     </td>
-                    <td className="py-3 text-right">${pos.entry_price?.toFixed(2)}</td>
+                    <td className="py-3 text-right">{formatPrice(pos.entry_price, isJapan)}</td>
                     <td className="py-3 text-right">{pos.shares?.toFixed(2)}</td>
-                    <td className="py-3 text-right">{formatCurrency(pos.position_value)}</td>
+                    <td className="py-3 text-right">{formatCurrency(pos.position_value, isJapan)}</td>
                     <td className="py-3 text-right">{pos.entry_score ?? '-'}</td>
                   </tr>
                 ))}
@@ -321,11 +354,11 @@ export default async function PortfolioPage() {
                     <td className="py-3 font-medium">{trade.symbol}</td>
                     <td className="py-3 text-sm text-gray-600">
                       {format(parseISO(trade.entry_date), 'MM/dd', { locale: ja })}
-                      <span className="text-gray-400 ml-1">${trade.entry_price?.toFixed(2)}</span>
+                      <span className="text-gray-400 ml-1">{formatPrice(trade.entry_price, isJapan)}</span>
                     </td>
                     <td className="py-3 text-sm text-gray-600">
                       {format(parseISO(trade.exit_date), 'MM/dd', { locale: ja })}
-                      <span className="text-gray-400 ml-1">${trade.exit_price?.toFixed(2)}</span>
+                      <span className="text-gray-400 ml-1">{formatPrice(trade.exit_price, isJapan)}</span>
                     </td>
                     <td className="py-3 text-right">{trade.hold_days}日</td>
                     <td className="py-3 text-right">
@@ -345,6 +378,120 @@ export default async function PortfolioPage() {
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+export default async function PortfolioPage() {
+  // Fetch data for both US and Japan portfolios in parallel
+  const [
+    // US
+    usV1Summary,
+    usV2Summary,
+    usOpenPositions,
+    usTrades,
+    usV1Snapshots,
+    usV2Snapshots,
+    // JP
+    jpV1Summary,
+    jpV2Summary,
+    jpOpenPositions,
+    jpTrades,
+    jpV1Snapshots,
+    jpV2Snapshots,
+    // Shared
+    configs,
+    thresholdHistory,
+  ] = await Promise.all([
+    // US
+    getPortfolioSummary('conservative'),
+    getPortfolioSummary('aggressive'),
+    getOpenPositions('conservative').then(async (v1) => {
+      const v2 = await getOpenPositions('aggressive');
+      return [...v1, ...v2];
+    }),
+    getTradeHistory(30, 'conservative').then(async (v1) => {
+      const v2 = await getTradeHistory(30, 'aggressive');
+      return [...v1, ...v2].sort((a, b) =>
+        new Date(b.exit_date).getTime() - new Date(a.exit_date).getTime()
+      );
+    }),
+    getPortfolioSnapshots('conservative', 30),
+    getPortfolioSnapshots('aggressive', 30),
+    // JP
+    getPortfolioSummary('jp_conservative'),
+    getPortfolioSummary('jp_aggressive'),
+    getOpenPositions('jp_conservative').then(async (v1) => {
+      const v2 = await getOpenPositions('jp_aggressive');
+      return [...v1, ...v2];
+    }),
+    getTradeHistory(30, 'jp_conservative').then(async (v1) => {
+      const v2 = await getTradeHistory(30, 'jp_aggressive');
+      return [...v1, ...v2].sort((a, b) =>
+        new Date(b.exit_date).getTime() - new Date(a.exit_date).getTime()
+      );
+    }),
+    getPortfolioSnapshots('jp_conservative', 30),
+    getPortfolioSnapshots('jp_aggressive', 30),
+    // Shared
+    getScoringConfigs(),
+    getThresholdHistory(30),
+  ]);
+
+  // Get configs for each market
+  const usV1Config = configs.find(c => c.strategy_mode === 'conservative');
+  const usV2Config = configs.find(c => c.strategy_mode === 'aggressive');
+  const jpV1Config = configs.find(c => c.strategy_mode === 'jp_conservative');
+  const jpV2Config = configs.find(c => c.strategy_mode === 'jp_aggressive');
+
+  // Filter threshold history by market
+  const usThresholdHistory = thresholdHistory.filter(
+    h => h.strategy_mode === 'conservative' || h.strategy_mode === 'aggressive'
+  );
+  const jpThresholdHistory = thresholdHistory.filter(
+    h => h.strategy_mode === 'jp_conservative' || h.strategy_mode === 'jp_aggressive'
+  );
+
+  // US Content
+  const usContent = (
+    <PortfolioContent
+      v1Summary={usV1Summary}
+      v2Summary={usV2Summary}
+      openPositions={usOpenPositions}
+      trades={usTrades}
+      v1Config={usV1Config}
+      v2Config={usV2Config}
+      thresholdHistory={usThresholdHistory}
+      isJapan={false}
+      v1Strategy="conservative"
+      v2Strategy="aggressive"
+    />
+  );
+
+  // JP Content
+  const jpContent = (
+    <PortfolioContent
+      v1Summary={jpV1Summary}
+      v2Summary={jpV2Summary}
+      openPositions={jpOpenPositions}
+      trades={jpTrades}
+      v1Config={jpV1Config}
+      v2Config={jpV2Config}
+      thresholdHistory={jpThresholdHistory}
+      isJapan={true}
+      v1Strategy="jp_conservative"
+      v2Strategy="jp_aggressive"
+    />
+  );
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-3xl font-bold text-gray-900">ポートフォリオ</h2>
+      </div>
+
+      {/* Market Tabs */}
+      <MarketTabs usContent={usContent} jpContent={jpContent} />
     </div>
   );
 }

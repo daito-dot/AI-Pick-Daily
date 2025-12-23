@@ -5,7 +5,7 @@ export type RiskToleranceType = 'conservative' | 'balanced' | 'aggressive';
 export type PickStatusType = 'generated' | 'published';
 export type PerformanceStatusType = 'win' | 'loss' | 'flat' | 'pending';
 export type AgentNameType = 'trend' | 'momentum' | 'value' | 'sentiment';
-export type StrategyModeType = 'conservative' | 'aggressive';
+export type StrategyModeType = 'conservative' | 'aggressive' | 'jp_conservative' | 'jp_aggressive';
 
 export interface DailyPick {
   id: string;

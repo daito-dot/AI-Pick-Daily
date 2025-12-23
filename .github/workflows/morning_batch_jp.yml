@@ -1,0 +1,87 @@
+name: Morning Scoring Batch (Japan)
+
+on:
+  schedule:
+    # JST 16:00 = UTC 07:00 (after Japan market close at 15:00-15:30 JST)
+    # Run Monday-Friday only (Japan trading days)
+    - cron: "0 7 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Run in debug mode'
+        required: false
+        default: 'false'
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  scoring-jp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify environment variables
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          echo "Checking environment variables..."
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "ERROR: SUPABASE_URL is not set or empty"
+            exit 1
+          else
+            echo "SUPABASE_URL is set (length: ${#SUPABASE_URL})"
+          fi
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "ERROR: SUPABASE_SERVICE_ROLE_KEY is not set or empty"
+            exit 1
+          else
+            echo "SUPABASE_SERVICE_ROLE_KEY is set (length: ${#SUPABASE_SERVICE_ROLE_KEY})"
+          fi
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "WARNING: GEMINI_API_KEY is not set"
+          else
+            echo "GEMINI_API_KEY is set (length: ${#GEMINI_API_KEY})"
+          fi
+          echo "All required environment variables verified."
+
+      - name: Run morning scoring for Japan stocks
+        env:
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
+          SCORING_MODEL: ${{ vars.SCORING_MODEL || 'gemini-2.5-flash-lite' }}
+          ANALYSIS_MODEL: ${{ vars.ANALYSIS_MODEL || 'gemini-3-flash-preview' }}
+          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro-preview' }}
+          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro-preview' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ENABLE_JUDGMENT: ${{ vars.ENABLE_JUDGMENT || 'true' }}
+          JUDGMENT_THINKING_LEVEL: ${{ vars.JUDGMENT_THINKING_LEVEL || 'low' }}
+          DEBUG: ${{ github.event.inputs.debug || 'false' }}
+        run: |
+          python scripts/daily_scoring_jp.py
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scoring-jp-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
