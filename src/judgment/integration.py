@@ -73,7 +73,7 @@ def prepare_stock_data_for_judgment(
 
 
 def fetch_news_for_judgment(
-    finnhub: FinnhubClient,
+    finnhub: FinnhubClient | None,
     symbol: str,
     days: int = 7,
 ) -> list[dict]:
@@ -81,13 +81,17 @@ def fetch_news_for_judgment(
     Fetch and format news for judgment.
 
     Args:
-        finnhub: Finnhub client
+        finnhub: Finnhub client (can be None for markets without Finnhub support)
         symbol: Stock symbol
         days: Days of news to fetch
 
     Returns:
         List of news dicts formatted for judgment
     """
+    if finnhub is None:
+        logger.debug(f"No Finnhub client available for {symbol}, skipping news fetch")
+        return []
+
     try:
         news_items = finnhub.get_company_news(symbol)
 
@@ -172,6 +176,9 @@ def save_judgment_to_db(
         for f in judgment.key_factors
     ]
 
+    # Derive market_type from strategy_mode
+    market_type = "jp" if judgment.strategy_mode.startswith("jp_") else "us"
+
     return supabase.save_judgment_record(
         symbol=judgment.symbol,
         batch_date=batch_date,
@@ -188,12 +195,13 @@ def save_judgment_to_db(
         prompt_version=judgment.prompt_version,
         raw_llm_response=judgment.raw_llm_response,
         judged_at=judgment.judged_at.isoformat(),
+        market_type=market_type,
     )
 
 
 def run_judgment_for_candidates(
     judgment_service: JudgmentService,
-    finnhub: FinnhubClient,
+    finnhub: FinnhubClient | None,
     supabase: SupabaseClient,
     candidates: list[tuple[Any, Any]],  # List of (stock_data, scored_stock)
     strategy_mode: str,
@@ -206,7 +214,7 @@ def run_judgment_for_candidates(
 
     Args:
         judgment_service: JudgmentService instance
-        finnhub: Finnhub client for news
+        finnhub: Finnhub client for news (can be None for JP stocks)
         supabase: Supabase client for persistence
         candidates: List of (stock_data, scored_stock) tuples, sorted by score
         strategy_mode: 'conservative' or 'aggressive'

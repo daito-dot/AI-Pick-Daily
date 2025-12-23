@@ -540,16 +540,19 @@ class SupabaseClient:
         Get current scoring configuration for a strategy.
 
         Args:
-            strategy_mode: 'conservative' or 'aggressive'
+            strategy_mode: 'conservative', 'aggressive', 'jp_conservative', or 'jp_aggressive'
 
         Returns:
-            Config dict with threshold and limits
+            Config dict with threshold and limits, or empty dict if not found
         """
-        result = self._client.table("scoring_config").select("*").eq(
-            "strategy_mode", strategy_mode
-        ).single().execute()
-
-        return result.data or {}
+        try:
+            result = self._client.table("scoring_config").select("*").eq(
+                "strategy_mode", strategy_mode
+            ).single().execute()
+            return result.data or {}
+        except Exception:
+            # No config found for this strategy_mode
+            return {}
 
     def get_all_scoring_configs(self) -> list[dict[str, Any]]:
         """
@@ -679,22 +682,28 @@ class SupabaseClient:
         shares: float,
         position_value: float,
         entry_score: int | None = None,
+        market_type: str | None = None,
     ) -> dict[str, Any]:
         """
         Open a new position in the virtual portfolio.
 
         Args:
-            strategy_mode: 'conservative' or 'aggressive'
+            strategy_mode: 'conservative', 'aggressive', 'jp_conservative', or 'jp_aggressive'
             symbol: Stock symbol
             entry_date: Date of entry (YYYY-MM-DD)
             entry_price: Entry price
             shares: Number of shares
             position_value: Total position value
             entry_score: Score at entry time
+            market_type: 'us' or 'jp' (auto-derived from strategy_mode if not provided)
 
         Returns:
             Inserted record
         """
+        # Auto-derive market_type from strategy_mode if not provided
+        if market_type is None:
+            market_type = "jp" if strategy_mode.startswith("jp_") else "us"
+
         record = {
             "strategy_mode": strategy_mode,
             "symbol": symbol,
@@ -703,6 +712,7 @@ class SupabaseClient:
             "shares": shares,
             "position_value": position_value,
             "status": "open",
+            "market_type": market_type,
         }
 
         if entry_score is not None:
@@ -768,13 +778,22 @@ class SupabaseClient:
         exit_reason: str,
         market_regime_at_entry: str | None = None,
         market_regime_at_exit: str | None = None,
+        market_type: str | None = None,
     ) -> dict[str, Any]:
         """
         Save a completed trade to history.
 
+        Args:
+            strategy_mode: 'conservative', 'aggressive', 'jp_conservative', or 'jp_aggressive'
+            market_type: 'us' or 'jp' (auto-derived from strategy_mode if not provided)
+
         Returns:
             Inserted record
         """
+        # Auto-derive market_type from strategy_mode if not provided
+        if market_type is None:
+            market_type = "jp" if strategy_mode.startswith("jp_") else "us"
+
         record = {
             "strategy_mode": strategy_mode,
             "symbol": symbol,
@@ -787,6 +806,7 @@ class SupabaseClient:
             "pnl": pnl,
             "pnl_pct": pnl_pct,
             "exit_reason": exit_reason,
+            "market_type": market_type,
         }
 
         if entry_score is not None:
@@ -839,13 +859,22 @@ class SupabaseClient:
         max_drawdown: float | None = None,
         sharpe_ratio: float | None = None,
         win_rate: float | None = None,
+        market_type: str | None = None,
     ) -> dict[str, Any]:
         """
         Save a daily portfolio snapshot.
 
+        Args:
+            strategy_mode: 'conservative', 'aggressive', 'jp_conservative', or 'jp_aggressive'
+            market_type: 'us' or 'jp' (auto-derived from strategy_mode if not provided)
+
         Returns:
             Upserted record
         """
+        # Auto-derive market_type from strategy_mode if not provided
+        if market_type is None:
+            market_type = "jp" if strategy_mode.startswith("jp_") else "us"
+
         record = {
             "snapshot_date": snapshot_date,
             "strategy_mode": strategy_mode,
@@ -854,6 +883,7 @@ class SupabaseClient:
             "positions_value": positions_value,
             "open_positions": open_positions,
             "closed_today": closed_today,
+            "market_type": market_type,
         }
 
         if daily_pnl is not None:
@@ -903,6 +933,7 @@ class SupabaseClient:
         prompt_version: str,
         raw_llm_response: str | None = None,
         judged_at: str | None = None,
+        market_type: str = "us",
     ) -> dict[str, Any]:
         """
         Save an LLM judgment record to the database.
@@ -910,7 +941,7 @@ class SupabaseClient:
         Args:
             symbol: Stock ticker symbol
             batch_date: Date of the judgment (YYYY-MM-DD)
-            strategy_mode: 'conservative' or 'aggressive'
+            strategy_mode: 'conservative', 'aggressive', 'jp_conservative', or 'jp_aggressive'
             decision: 'buy', 'hold', or 'avoid'
             confidence: Model confidence (0.0-1.0)
             score: Composite score (0-100)
@@ -923,6 +954,7 @@ class SupabaseClient:
             prompt_version: Prompt version used
             raw_llm_response: Optional raw response for debugging
             judged_at: Optional timestamp (uses now if not provided)
+            market_type: 'us' or 'jp' (default: 'us')
 
         Returns:
             Inserted record
@@ -943,6 +975,7 @@ class SupabaseClient:
             "input_summary": input_summary,
             "model_version": model_version,
             "prompt_version": prompt_version,
+            "market_type": market_type,
         }
 
         if raw_llm_response:

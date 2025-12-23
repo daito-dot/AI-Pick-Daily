@@ -18,19 +18,34 @@ UPDATE stock_scores SET market_type = 'us' WHERE market_type IS NULL;
 UPDATE daily_picks SET market_type = 'us' WHERE market_type IS NULL;
 UPDATE judgment_records SET market_type = 'us' WHERE market_type IS NULL;
 
--- 5. Add jp_conservative and jp_aggressive to strategy_mode constraint
--- First, check if the constraint exists and drop it
+-- 5. Add jp_conservative and jp_aggressive to strategy_mode ENUM type
+-- PostgreSQL ENUM types need explicit ALTER TYPE to add new values
+
+-- Add new values to the enum type (will fail silently if already exists)
 DO $$
 BEGIN
-    -- Try to drop existing constraint
+    -- Add jp_conservative to enum
+    ALTER TYPE strategy_mode_type ADD VALUE IF NOT EXISTS 'jp_conservative';
+EXCEPTION WHEN duplicate_object THEN
+    NULL;
+END $$;
+
+DO $$
+BEGIN
+    -- Add jp_aggressive to enum
+    ALTER TYPE strategy_mode_type ADD VALUE IF NOT EXISTS 'jp_aggressive';
+EXCEPTION WHEN duplicate_object THEN
+    NULL;
+END $$;
+
+-- Also drop any CHECK constraints that might exist (fallback)
+DO $$
+BEGIN
     ALTER TABLE stock_scores DROP CONSTRAINT IF EXISTS stock_scores_strategy_mode_check;
     ALTER TABLE daily_picks DROP CONSTRAINT IF EXISTS daily_picks_strategy_mode_check;
 EXCEPTION WHEN OTHERS THEN
     NULL;
 END $$;
-
--- Note: strategy_mode will now accept 'jp_conservative' and 'jp_aggressive'
--- The application handles validation
 
 -- 6. Create indexes for faster queries
 CREATE INDEX IF NOT EXISTS idx_stock_scores_market_type
