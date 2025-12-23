@@ -613,10 +613,15 @@ def main():
     logger.info("=" * 60)
 
     # Finish batch logging
+    # Use 5d results if available, otherwise fall back to 1d results
     if not results_5d.get("error"):
         batch_ctx.total_items = results_5d.get("total_stocks", 0)
         batch_ctx.successful_items = results_5d.get("successful", 0)
         batch_ctx.failed_items = results_5d.get("failed", 0)
+    elif not results_1d.get("error"):
+        batch_ctx.total_items = results_1d.get("total_stocks", 0)
+        batch_ctx.successful_items = results_1d.get("successful", 0)
+        batch_ctx.failed_items = results_1d.get("failed", 0)
     BatchLogger.finish(batch_ctx)
 
 

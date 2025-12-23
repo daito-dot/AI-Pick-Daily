@@ -205,7 +205,7 @@ export async function getScoresForDate(date: string): Promise<StockScore[]> {
 }
 
 /**
- * Fetch performance history
+ * Fetch performance history from stock_scores where was_picked = true
  */
 export async function getPerformanceHistory(days: number = 30): Promise<PerformanceLog[]> {
   try {
@@ -213,13 +213,46 @@ export async function getPerformanceHistory(days: number = 30): Promise<Performa
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const { data } = await supabase
-      .from('performance_log')
+    const { data, error } = await supabase
+      .from('stock_scores')
       .select('*')
-      .gte('pick_date', startDate.toISOString().split('T')[0])
-      .order('pick_date', { ascending: false });
+      .eq('was_picked', true)
+      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .order('batch_date', { ascending: false });
 
-    return data || [];
+    if (error) {
+      console.error('getPerformanceHistory query error:', error);
+      return [];
+    }
+
+    // Map stock_scores to PerformanceLog format
+    return (data || []).map(score => {
+      const return1d = score.return_1d;
+      const return5d = score.return_5d;
+
+      // Determine status based on return
+      const getStatus = (ret: number | null): 'win' | 'loss' | 'flat' | 'pending' => {
+        if (ret === null || ret === undefined) return 'pending';
+        if (ret >= 1) return 'win';
+        if (ret <= -1) return 'loss';
+        return 'flat';
+      };
+
+      return {
+        id: score.id,
+        pick_date: score.batch_date,
+        symbol: score.symbol,
+        recommendation_open_price: score.price_at_time || 0,
+        recommendation_score: score.composite_score || 0,
+        recommendation_percentile: 0, // Not available in stock_scores
+        market_regime_at_time: 'normal' as const,
+        return_pct_1d: return1d,
+        status_1d: getStatus(return1d),
+        return_pct_5d: return5d,
+        status_5d: getStatus(return5d),
+        created_at: score.created_at || score.batch_date,
+      };
+    });
   } catch (error) {
     console.error('getPerformanceHistory error:', error);
     return [];

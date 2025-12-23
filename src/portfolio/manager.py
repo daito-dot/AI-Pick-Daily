@@ -288,6 +288,30 @@ class PortfolioManager:
         positions = self.get_open_positions(strategy_mode)
         return sum(p.position_value for p in positions)
 
+    def _get_total_realized_pnl(self, strategy_mode: str) -> float:
+        """
+        Get total realized PnL from all closed trades.
+
+        Used to recalculate cash when all positions are closed.
+        """
+        try:
+            result = self.supabase._client.table("trade_history").select(
+                "pnl"
+            ).eq(
+                "strategy_mode", strategy_mode
+            ).execute()
+
+            trades = result.data or []
+            total_pnl = sum(float(t.get("pnl", 0) or 0) for t in trades)
+            logger.info(
+                f"Total realized PnL for {strategy_mode}: "
+                f"{len(trades)} trades = ¥{total_pnl:,.0f}"
+            )
+            return total_pnl
+        except Exception as e:
+            logger.error(f"Failed to get total realized PnL: {e}")
+            return 0.0
+
     def _get_positions_opened_on(self, strategy_mode: str, date: str) -> float:
         """
         Get total entry value of positions opened on a specific date.
@@ -775,6 +799,17 @@ class PortfolioManager:
             prev_sp500_cumulative = 0
             # First snapshot: calculate cash as what's left after positions
             cash_balance = INITIAL_CAPITAL - self._get_invested_cost(strategy_mode)
+
+        # CRITICAL FIX: When all positions are closed, recalculate cash from first principles
+        # This prevents cash balance corruption from accumulating errors
+        if len(positions) == 0:
+            # Cash = Initial Capital + Total Realized PnL
+            total_realized_pnl = self._get_total_realized_pnl(strategy_mode)
+            cash_balance = INITIAL_CAPITAL + total_realized_pnl
+            logger.info(
+                f"[{strategy_mode}] No open positions - recalculated cash from realized PnL: "
+                f"¥{INITIAL_CAPITAL:,.0f} + ¥{total_realized_pnl:,.0f} = ¥{cash_balance:,.0f}"
+            )
 
         # Calculate total value
         total_value = cash_balance + positions_value
