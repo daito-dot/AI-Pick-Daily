@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
 from src.reflection import ReflectionService
+from src.batch_logger import BatchLogger, BatchType
 
 # Setup logging
 log_dir = Path("logs")
@@ -43,18 +44,26 @@ def main():
     logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
     logger.info("=" * 50)
 
+    # Start batch logging
+    batch_ctx = BatchLogger.start(BatchType.WEEKLY_RESEARCH)
+
     # Check if reflection is enabled
     if not config.llm.enable_reflection:
         logger.info("Reflection is disabled in config, exiting")
+        BatchLogger.finish(batch_ctx, success=True, total_items=0)
         return
 
     try:
         reflection_service = ReflectionService()
     except Exception as e:
         logger.error(f"Failed to initialize reflection service: {e}")
+        BatchLogger.finish(batch_ctx, success=False, error_message=str(e))
         sys.exit(1)
 
     # Run for both strategies
+    successful_strategies = 0
+    failed_strategies = 0
+
     for strategy in ["conservative", "aggressive"]:
         logger.info(f"\n{'='*30}")
         logger.info(f"Reflecting on {strategy} strategy...")
@@ -96,13 +105,25 @@ def main():
             if unreliable:
                 logger.info(f"  Unreliable factors: {', '.join(f.factor_type for f in unreliable)}")
 
+            successful_strategies += 1
+
         except Exception as e:
             logger.error(f"Reflection failed for {strategy}: {e}")
+            failed_strategies += 1
             continue
 
     logger.info("\n" + "=" * 50)
     logger.info("Weekly reflection completed")
     logger.info("=" * 50)
+
+    # Finish batch logging
+    BatchLogger.finish(
+        batch_ctx,
+        success=failed_strategies == 0,
+        total_items=2,  # 2 strategies
+        successful_items=successful_strategies,
+        failed_items=failed_strategies,
+    )
 
 
 if __name__ == "__main__":
