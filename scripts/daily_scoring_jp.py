@@ -184,54 +184,50 @@ def fetch_stock_data_jp(
             dividend_yield = None
             market_cap = None
 
-        # Build StockData for V1
+        # Build StockData for V1 (must match StockData dataclass fields)
+        open_price = hist["Open"].iloc[-1] if not hist.empty else current_price
+
         stock_data = StockData(
             symbol=symbol,
-            current_price=current_price,
-            sma_20=sma_20,
-            sma_50=sma_50,
-            sma_200=sma_200,
-            rsi_14=rsi_14,
-            volume_ratio=volume_ratio,
-            high_52w=high_52w,
-            low_52w=low_52w,
-            return_5d=return_5d,
-            return_20d=return_20d,
-            return_60d=return_60d,
+            prices=closes,
+            volumes=volumes,
+            open_price=float(open_price),
             pe_ratio=pe_ratio,
             pb_ratio=pb_ratio,
             dividend_yield=dividend_yield * 100 if dividend_yield else None,
-            news_count=0,  # Skip news for now
-            positive_news_ratio=0.5,
+            week_52_high=high_52w,
+            week_52_low=low_52w,
+            news_count_7d=0,  # Skip news for JP stocks
+            news_sentiment=None,
+            sector_avg_pe=25.0,  # Default
         )
 
-        # Build V2StockData
-        # Calculate 12-1 momentum (12-month return excluding last month)
-        if len(closes) >= 252:
-            price_12m_ago = closes[-252]
-            price_1m_ago = closes[-21]
-            momentum_12_1 = ((price_1m_ago / price_12m_ago) - 1) * 100
+        # Calculate gap percentage for V2
+        if len(hist) >= 2:
+            prev_close = hist["Close"].iloc[-2]
+            gap_pct = ((open_price - prev_close) / prev_close) * 100
         else:
-            momentum_12_1 = return_60d  # Fallback
+            gap_pct = 0.0
 
-        # Breakout detection
-        recent_high = max(highs[-20:]) if len(highs) >= 20 else max(highs)
-        is_breakout = current_price > recent_high * 0.98 and volume_ratio > 1.5
-
+        # Build V2StockData (extends StockData)
         v2_data = V2StockData(
             symbol=symbol,
-            current_price=current_price,
-            momentum_12_1_pct=momentum_12_1,
-            is_breakout=is_breakout,
-            breakout_volume_ratio=volume_ratio if is_breakout else 1.0,
-            distance_from_high_pct=((current_price / high_52w) - 1) * 100,
-            has_earnings_catalyst=False,  # Skip for now
-            earnings_surprise_pct=0,
-            has_gap_up=False,
-            gap_up_pct=0,
-            volatility=calculate_volatility(closes[-20:]) if len(closes) >= 20 else 0.02,
-            beta=1.0,  # Default
-            rsi_14=rsi_14,
+            prices=closes,
+            volumes=volumes,
+            open_price=float(open_price),
+            pe_ratio=pe_ratio,
+            pb_ratio=pb_ratio,
+            dividend_yield=dividend_yield * 100 if dividend_yield else None,
+            week_52_high=high_52w,
+            week_52_low=low_52w,
+            news_count_7d=0,
+            news_sentiment=None,
+            sector_avg_pe=25.0,
+            vix_level=14.0,  # Will be updated by caller if needed
+            gap_pct=gap_pct,
+            earnings_surprise_pct=None,
+            price_1m_ago=closes[-21] if len(closes) >= 21 else None,
+            price_12m_ago=closes[-252] if len(closes) >= 252 else None,
         )
 
         return stock_data, v2_data
