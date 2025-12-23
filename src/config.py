@@ -53,9 +53,9 @@ class LLMConfig:
     """LLM-related configuration."""
     provider: Literal["gemini", "claude"] = "gemini"
     scoring_model: str = "gemini-2.5-flash-lite"
-    analysis_model: str = "gemini-3-flash"  # For judgment (Layer 2)
-    reflection_model: str = "gemini-3-pro"  # For reflection (Layer 3)
-    deep_research_model: str = "gemini-3-pro"  # For deep research (Layer 4) - fallback
+    analysis_model: str = "gemini-3-flash-preview"  # For judgment (Layer 2)
+    reflection_model: str = "gemini-3-pro-preview"  # For reflection (Layer 3)
+    deep_research_model: str = "gemini-3-pro-preview"  # For deep research (Layer 4) - fallback
     deep_research_agent: str = "deep-research-pro-preview-12-2025"  # Deep Research agent
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
