@@ -515,13 +515,13 @@ def main():
     v2_final_picks = dual_result.v2_picks
 
     if use_llm_judgment:
-        # Track LLM judgment separately
-        judgment_ctx = BatchLogger.start(
-            BatchType.LLM_JUDGMENT,
-            model=config.llm.analysis_model
-        )
-
+        judgment_ctx = None  # Initialize to handle potential exceptions
         try:
+            # Track LLM judgment separately
+            judgment_ctx = BatchLogger.start(
+                BatchType.LLM_JUDGMENT,
+                model=config.llm.analysis_model
+            )
             judgment_service = JudgmentService()
 
             # Build candidate lists: (stock_data, scored_stock) sorted by composite score
@@ -588,7 +588,8 @@ def main():
 
         except Exception as e:
             logger.error(f"LLM judgment failed, using rule-based picks: {e}")
-            BatchLogger.finish(judgment_ctx, error=str(e))
+            if judgment_ctx is not None:
+                BatchLogger.finish(judgment_ctx, error=str(e))
             # Fall back to rule-based picks
             v1_final_picks = dual_result.v1_picks
             v2_final_picks = dual_result.v2_picks

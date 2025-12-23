@@ -245,7 +245,7 @@ export async function getPerformanceHistory(days: number = 30): Promise<Performa
         recommendation_open_price: score.price_at_time || 0,
         recommendation_score: score.composite_score || 0,
         recommendation_percentile: 0, // Not available in stock_scores
-        market_regime_at_time: 'normal' as const,
+        market_regime_at_time: score.market_regime_at_time || 'normal',
         return_pct_1d: return1d,
         status_1d: getStatus(return1d),
         return_pct_5d: return5d,

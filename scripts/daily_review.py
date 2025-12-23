@@ -483,6 +483,10 @@ def main():
         BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
+    # Initialize results in case of unexpected exceptions
+    results_5d = {"error": "Not executed"}
+    results_1d = {"error": "Not executed"}
+
     # 1. Calculate returns for ALL stocks (5-day review)
     logger.info("Step 1: Calculating 5-day returns for ALL scored stocks...")
     results_5d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=5, return_field="5d")
@@ -539,6 +543,9 @@ def main():
     # Get all open positions
     all_positions = portfolio.get_open_positions()
     logger.info(f"Found {len(all_positions)} open positions")
+
+    # Initialize exit_signals in case of exceptions
+    exit_signals = []
 
     if all_positions:
         # Evaluate exit signals
