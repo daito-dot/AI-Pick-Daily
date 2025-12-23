@@ -30,7 +30,7 @@ from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
 from src.scoring.composite_v2 import run_dual_scoring
 from src.batch_logger import BatchLogger, BatchType
-from src.config.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
+from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
 
 
 class DataFetchError(Exception):
