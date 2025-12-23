@@ -1,6 +1,7 @@
-import { getTodayPicks } from '@/lib/supabase';
+import { getTodayPicks, getTodayJudgments } from '@/lib/supabase';
 import { StockCard } from '@/components/StockCard';
 import { MarketRegimeStatus } from '@/components/MarketRegimeStatus';
+import { JudgmentPanel } from '@/components/JudgmentPanel';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import type { StockScore, StrategyModeType } from '@/types';
@@ -118,13 +119,18 @@ function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
 }
 
 export default async function HomePage() {
+  const [picksData, judgments] = await Promise.all([
+    getTodayPicks(),
+    getTodayJudgments(),
+  ]);
+
   const {
     conservativePicks,
     aggressivePicks,
     conservativeScores,
     aggressiveScores,
     regime,
-  } = await getTodayPicks();
+  } = picksData;
 
   const today = format(new Date(), 'yyyy年MM月dd日 (E)', { locale: ja });
 
@@ -192,6 +198,13 @@ export default async function HomePage() {
           </div>
         </div>
       </div>
+
+      {/* LLM Judgment Panel (Layer 2) */}
+      {judgments.length > 0 && (
+        <div className="mt-8">
+          <JudgmentPanel judgments={judgments} />
+        </div>
+      )}
 
       {/* Full Scores Table */}
       {(conservativeScores.length > 0 || aggressiveScores.length > 0) && (

@@ -1,5 +1,14 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { DailyPick, StockScore, MarketRegimeHistory, AILesson, PerformanceLog, StrategyModeType } from '@/types';
+import type {
+  DailyPick,
+  StockScore,
+  MarketRegimeHistory,
+  AILesson,
+  PerformanceLog,
+  StrategyModeType,
+  JudgmentRecord,
+  ReflectionRecord,
+} from '@/types';
 
 // Lazy initialization to handle build-time when env vars may not be set
 let supabaseInstance: SupabaseClient | null = null;
@@ -505,5 +514,243 @@ export async function getPortfolioSummary(strategyMode: string): Promise<{
       cumulativePnlPct: 0,
       alpha: 0,
     };
+  }
+}
+
+// ============================================
+// LLM Judgment Layer (Layer 2) Functions
+// ============================================
+
+/**
+ * Fetch today's LLM judgments for all stocks
+ */
+export async function getTodayJudgments(): Promise<JudgmentRecord[]> {
+  try {
+    const supabase = getSupabase();
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select('*')
+      .eq('batch_date', today)
+      .order('confidence', { ascending: false });
+
+    if (error) {
+      console.error('[getTodayJudgments] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getTodayJudgments error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch LLM judgments for a specific date
+ */
+export async function getJudgmentsForDate(date: string): Promise<JudgmentRecord[]> {
+  try {
+    const supabase = getSupabase();
+
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select('*')
+      .eq('batch_date', date)
+      .order('confidence', { ascending: false });
+
+    if (error) {
+      console.error('[getJudgmentsForDate] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getJudgmentsForDate error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch judgment for a specific symbol and date
+ */
+export async function getJudgmentBySymbol(
+  symbol: string,
+  date?: string,
+  strategyMode?: StrategyModeType
+): Promise<JudgmentRecord | null> {
+  try {
+    const supabase = getSupabase();
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    let query = supabase
+      .from('judgment_records')
+      .select('*')
+      .eq('symbol', symbol)
+      .eq('batch_date', targetDate);
+
+    if (strategyMode) {
+      query = query.eq('strategy_mode', strategyMode);
+    }
+
+    const { data, error } = await query.limit(1).single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('[getJudgmentBySymbol] error:', error);
+      return null;
+    }
+
+    return data || null;
+  } catch (error) {
+    console.error('getJudgmentBySymbol error:', error);
+    return null;
+  }
+}
+
+/**
+ * Fetch recent judgments with their outcomes (for analysis)
+ */
+export async function getJudgmentHistory(days: number = 30): Promise<JudgmentRecord[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select('*')
+      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .order('batch_date', { ascending: false })
+      .order('confidence', { ascending: false });
+
+    if (error) {
+      console.error('[getJudgmentHistory] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getJudgmentHistory error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch judgment stats (accuracy, confidence distribution)
+ */
+export async function getJudgmentStats(days: number = 30): Promise<{
+  totalJudgments: number;
+  buyDecisions: number;
+  holdDecisions: number;
+  avoidDecisions: number;
+  avgConfidence: number;
+  highConfidenceCount: number;
+}> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select('decision, confidence')
+      .gte('batch_date', startDate.toISOString().split('T')[0]);
+
+    if (error || !data) {
+      return {
+        totalJudgments: 0,
+        buyDecisions: 0,
+        holdDecisions: 0,
+        avoidDecisions: 0,
+        avgConfidence: 0,
+        highConfidenceCount: 0,
+      };
+    }
+
+    const buyCount = data.filter(d => d.decision === 'buy').length;
+    const holdCount = data.filter(d => d.decision === 'hold').length;
+    const avoidCount = data.filter(d => d.decision === 'avoid').length;
+    const avgConf = data.length > 0
+      ? data.reduce((sum, d) => sum + (d.confidence || 0), 0) / data.length
+      : 0;
+    const highConf = data.filter(d => d.confidence >= 0.7).length;
+
+    return {
+      totalJudgments: data.length,
+      buyDecisions: buyCount,
+      holdDecisions: holdCount,
+      avoidDecisions: avoidCount,
+      avgConfidence: avgConf,
+      highConfidenceCount: highConf,
+    };
+  } catch (error) {
+    console.error('getJudgmentStats error:', error);
+    return {
+      totalJudgments: 0,
+      buyDecisions: 0,
+      holdDecisions: 0,
+      avoidDecisions: 0,
+      avgConfidence: 0,
+      highConfidenceCount: 0,
+    };
+  }
+}
+
+// ============================================
+// Reflection Layer (Layer 3) Functions
+// ============================================
+
+/**
+ * Fetch recent reflections
+ */
+export async function getReflections(limit: number = 5): Promise<ReflectionRecord[]> {
+  try {
+    const supabase = getSupabase();
+
+    const { data, error } = await supabase
+      .from('reflection_records')
+      .select('*')
+      .order('reflection_date', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('[getReflections] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getReflections error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch latest reflection for a strategy
+ */
+export async function getLatestReflection(
+  strategyMode: StrategyModeType
+): Promise<ReflectionRecord | null> {
+  try {
+    const supabase = getSupabase();
+
+    const { data, error } = await supabase
+      .from('reflection_records')
+      .select('*')
+      .eq('strategy_mode', strategyMode)
+      .order('reflection_date', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('[getLatestReflection] error:', error);
+      return null;
+    }
+
+    return data || null;
+  } catch (error) {
+    console.error('getLatestReflection error:', error);
+    return null;
   }
 }
