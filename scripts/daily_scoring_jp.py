@@ -210,6 +210,7 @@ def fetch_stock_data_jp(
             gap_pct = 0.0
 
         # Build V2StockData (extends StockData)
+        # Note: vix_level will be updated after fetching all data
         v2_data = V2StockData(
             symbol=symbol,
             prices=closes,
@@ -223,9 +224,10 @@ def fetch_stock_data_jp(
             news_count_7d=0,
             news_sentiment=None,
             sector_avg_pe=25.0,
-            vix_level=14.0,  # Will be updated by caller if needed
+            vix_level=20.0,  # Default, will be updated in main()
             gap_pct=gap_pct,
             earnings_surprise_pct=None,
+            analyst_revision_score=None,  # Match US version
             price_1m_ago=closes[-21] if len(closes) >= 21 else None,
             price_12m_ago=closes[-252] if len(closes) >= 252 else None,
         )
@@ -345,10 +347,11 @@ def main():
     """Main entry point for Japan stock scoring."""
     logger.info("=" * 60)
     logger.info("Starting Japan Stock Daily Scoring Batch")
+    logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
     logger.info("=" * 60)
 
-    # Start batch logging
-    batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING)
+    # Start batch logging (include model like US version)
+    batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, model=config.llm.scoring_model)
 
     try:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -442,6 +445,10 @@ def main():
         if failed_symbols:
             logger.warning(f"Failed to fetch {len(failed_symbols)} stocks")
 
+        # Update VIX level in all V2 stock data (like US version)
+        for v2_data in v2_stocks_data:
+            v2_data.vix_level = vix
+
         # Ensure minimum data
         MIN_STOCKS_REQUIRED = 10
         if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
@@ -473,11 +480,24 @@ def main():
             v1_stocks_data=v1_stocks_data,
         )
 
+        # Record batch completion stats (like US version)
+        batch_ctx.successful_items = len(v1_stocks_data)
+        batch_ctx.failed_items = len(failed_symbols)
+        batch_ctx.total_items = len(JP_STOCK_SYMBOLS)
+        batch_ctx.metadata = {
+            "v1_picks": dual_result.v1_picks,
+            "v2_picks": dual_result.v2_picks,
+            "market_regime": regime,
+            "market": "jp",
+        }
+
         # Finish batch
         BatchLogger.finish(batch_ctx)
 
         logger.info("=" * 60)
         logger.info("Japan Stock Daily Scoring completed successfully")
+        logger.info(f"JP Conservative Picks: {dual_result.v1_picks}")
+        logger.info(f"JP Aggressive Picks: {dual_result.v2_picks}")
         logger.info("=" * 60)
 
     except Exception as e:
