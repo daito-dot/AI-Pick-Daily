@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import config
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
 from src.data.supabase_client import SupabaseClient
-from src.scoring.market_regime import decide_market_regime
+from src.scoring.market_regime import decide_market_regime, calculate_sma, calculate_volatility
 from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
 from src.scoring.composite_v2 import run_dual_scoring
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 def fetch_market_regime_data_jp(yf_client: YFinanceClient) -> dict:
     """
     Fetch data needed for market regime determination.
-    Uses VIX as global volatility indicator.
+    Uses VIX as global volatility indicator, Nikkei 225 as benchmark.
     """
     logger.info("Fetching market regime data for Japan stocks...")
 
@@ -72,7 +72,7 @@ def fetch_market_regime_data_jp(yf_client: YFinanceClient) -> dict:
         raise DataFetchError("Failed to get Nikkei 225 price")
     logger.info(f"Nikkei 225: {nikkei_price}")
 
-    # Get Nikkei 225 historical prices for SMA
+    # Get Nikkei 225 historical prices for SMA and volatility
     import yfinance as yf
     ticker = yf.Ticker("^N225")
     hist = ticker.history(period="60d")
@@ -82,10 +82,19 @@ def fetch_market_regime_data_jp(yf_client: YFinanceClient) -> dict:
 
     prices = hist["Close"].tolist()
 
+    # Calculate metrics (same as US version)
+    nikkei_sma20 = calculate_sma(prices, 20)
+    volatility_5d = calculate_volatility(prices, 5)
+    volatility_30d = calculate_volatility(prices, 30)
+
+    logger.info(f"Market data: VIX={vix:.2f}, Nikkei={nikkei_price:.2f}, SMA20={nikkei_sma20:.2f}")
+
     return {
         "vix": vix,
         "benchmark_price": nikkei_price,
-        "prices": prices,
+        "benchmark_sma20": nikkei_sma20,
+        "volatility_5d": volatility_5d,
+        "volatility_30d": volatility_30d,
     }
 
 
@@ -343,16 +352,19 @@ def main():
 
         vix = regime_data["vix"]
         nikkei_price = regime_data["benchmark_price"]
-        prices = regime_data["prices"]
 
-        # Determine market regime
-        from src.scoring.market_regime import calculate_sma, calculate_volatility
-        sma_20 = calculate_sma(prices, 20)
-        volatility = calculate_volatility(prices)
-        sma_deviation = ((nikkei_price - sma_20) / sma_20) * 100 if sma_20 else 0
+        # Determine market regime (same logic as US version)
+        market_regime = decide_market_regime(
+            vix=regime_data["vix"],
+            sp500_price_today=regime_data["benchmark_price"],
+            sp500_sma20=regime_data["benchmark_sma20"],
+            volatility_5d_avg=regime_data["volatility_5d"],
+            volatility_30d_avg=regime_data["volatility_30d"],
+        )
 
-        regime = decide_market_regime(vix, sma_deviation, volatility)
+        regime = market_regime.regime.value
         logger.info(f"Market Regime: {regime} (VIX={vix:.1f})")
+        logger.info(f"Max Picks: {market_regime.max_picks}")
 
         # Check for crisis mode
         if regime == "crisis":
