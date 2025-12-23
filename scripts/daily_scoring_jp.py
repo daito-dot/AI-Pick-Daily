@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
-from src.data.supabase_client import SupabaseClient
+from src.data.supabase_client import SupabaseClient, MarketRegimeRecord, StockScore, DailyPick
 from src.scoring.market_regime import decide_market_regime, calculate_sma, calculate_volatility
 from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
@@ -241,77 +241,104 @@ def save_results_jp(
     supabase: SupabaseClient,
     batch_date: str,
     market_regime: str,
-    vix_level: float,
-    all_scores: list[dict],
-    v1_picks: list[str],
-    v2_picks: list[str],
+    dual_result,  # DualScoringResult
+    v1_stocks_data: list[StockData],
 ):
-    """Save scoring results to Supabase with market_type='jp'."""
+    """Save scoring results to Supabase with market_type='jp'.
 
-    # Save market regime
-    supabase.save_market_regime(
-        check_date=batch_date,
-        vix_level=vix_level,
-        sp500_price=0,  # Not applicable for Japan
-        market_regime=market_regime,
-        sp500_sma20_deviation_pct=0,
-        volatility_cluster_flag=False,
-        notes=f"Japan stocks batch - VIX: {vix_level}",
-    )
+    Note: Market regime is saved before this function is called.
+    Follows same pattern as US version but adds market_type='jp'.
+    """
+    # Helper to get price for a symbol
+    def get_price(symbol: str) -> float:
+        return next(
+            (d.open_price for d in v1_stocks_data if d.symbol == symbol),
+            0.0,
+        )
 
-    # Save V1 picks
+    # Save V1 (jp_conservative) stock scores
+    # Using raw SQL to include market_type which StockScore doesn't have
+    v1_score_data = [
+        {
+            "batch_date": batch_date,
+            "symbol": s.symbol,
+            "strategy_mode": "jp_conservative",
+            "trend_score": int(s.trend_score),
+            "momentum_score": int(s.momentum_score),
+            "value_score": int(s.value_score),
+            "sentiment_score": int(s.sentiment_score),
+            "composite_score": int(s.composite_score),
+            "percentile_rank": int(s.percentile_rank),
+            "reasoning": s.reasoning,
+            "price_at_time": float(get_price(s.symbol)),
+            "market_regime_at_time": market_regime,
+            "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
+            "breakout_score": int(s.breakout_score) if s.breakout_score else None,
+            "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
+            "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
+            "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
+            "market_type": "jp",
+        }
+        for s in dual_result.v1_scores
+    ]
+    supabase._client.table("stock_scores").upsert(
+        v1_score_data,
+        on_conflict="batch_date,symbol,strategy_mode",
+    ).execute()
+
+    # Save V2 (jp_aggressive) stock scores
+    v2_score_data = [
+        {
+            "batch_date": batch_date,
+            "symbol": s.symbol,
+            "strategy_mode": "jp_aggressive",
+            "trend_score": int(s.trend_score),
+            "momentum_score": int(s.momentum_score),
+            "value_score": int(s.value_score),
+            "sentiment_score": int(s.sentiment_score),
+            "composite_score": int(s.composite_score),
+            "percentile_rank": int(s.percentile_rank),
+            "reasoning": s.reasoning,
+            "price_at_time": float(get_price(s.symbol)),
+            "market_regime_at_time": market_regime,
+            "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
+            "breakout_score": int(s.breakout_score) if s.breakout_score else None,
+            "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
+            "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
+            "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
+            "market_type": "jp",
+        }
+        for s in dual_result.v2_scores
+    ]
+    supabase._client.table("stock_scores").upsert(
+        v2_score_data,
+        on_conflict="batch_date,symbol,strategy_mode",
+    ).execute()
+
+    # Save V1 daily picks (with market_type)
     supabase._client.table("daily_picks").upsert({
         "batch_date": batch_date,
         "strategy_mode": "jp_conservative",
-        "symbols": v1_picks,
-        "pick_count": len(v1_picks),
+        "symbols": dual_result.v1_picks,
+        "pick_count": len(dual_result.v1_picks),
         "market_regime": market_regime,
+        "status": "published",
         "market_type": "jp",
     }, on_conflict="batch_date,strategy_mode").execute()
 
-    # Save V2 picks
+    # Save V2 daily picks (with market_type)
     supabase._client.table("daily_picks").upsert({
         "batch_date": batch_date,
         "strategy_mode": "jp_aggressive",
-        "symbols": v2_picks,
-        "pick_count": len(v2_picks),
+        "symbols": dual_result.v2_picks,
+        "pick_count": len(dual_result.v2_picks),
         "market_regime": market_regime,
+        "status": "published",
         "market_type": "jp",
     }, on_conflict="batch_date,strategy_mode").execute()
 
-    # Save all scores
-    for score in all_scores:
-        # V1 score
-        supabase._client.table("stock_scores").upsert({
-            "batch_date": batch_date,
-            "symbol": score["symbol"],
-            "strategy_mode": "jp_conservative",
-            "trend_score": score.get("v1_trend", 0),
-            "momentum_score": score.get("v1_momentum", 0),
-            "value_score": score.get("v1_value", 0),
-            "sentiment_score": score.get("v1_sentiment", 50),
-            "composite_score": score.get("v1_composite", 0),
-            "was_picked": score["symbol"] in v1_picks,
-            "market_regime_at_time": market_regime,
-            "market_type": "jp",
-        }, on_conflict="batch_date,symbol,strategy_mode").execute()
-
-        # V2 score
-        supabase._client.table("stock_scores").upsert({
-            "batch_date": batch_date,
-            "symbol": score["symbol"],
-            "strategy_mode": "jp_aggressive",
-            "momentum_12_1_score": score.get("v2_momentum", 0),
-            "breakout_score": score.get("v2_breakout", 0),
-            "catalyst_score": score.get("v2_catalyst", 0),
-            "risk_adjusted_score": score.get("v2_risk", 0),
-            "composite_score": score.get("v2_composite", 0),
-            "was_picked": score["symbol"] in v2_picks,
-            "market_regime_at_time": market_regime,
-            "market_type": "jp",
-        }, on_conflict="batch_date,symbol,strategy_mode").execute()
-
-    logger.info(f"Saved results: V1 picks={len(v1_picks)}, V2 picks={len(v2_picks)}, Total scores={len(all_scores)}")
+    logger.info(f"Saved: V1 scores={len(dual_result.v1_scores)}, V2 scores={len(dual_result.v2_scores)}")
+    logger.info(f"Picks: V1={dual_result.v1_picks}, V2={dual_result.v2_picks}")
 
 
 def main():
@@ -350,12 +377,40 @@ def main():
         logger.info(f"Market Regime: {regime} (VIX={vix:.1f})")
         logger.info(f"Max Picks: {market_regime.max_picks}")
 
+        # Save market regime first (like US version)
+        supabase.save_market_regime(MarketRegimeRecord(
+            check_date=today,
+            vix_level=vix,
+            market_regime=regime,
+            sp500_sma20_deviation_pct=0,
+            volatility_cluster_flag=False,
+            notes=f"Japan stocks - VIX: {vix}",
+        ))
+
         # Check for crisis mode
-        if regime == "crisis":
-            logger.warning("Market in CRISIS mode - skipping stock scoring")
-            save_results_jp(supabase, today, regime, vix, [], [], [])
-            batch_ctx.total_items = 0
-            batch_ctx.processed_items = 0
+        if market_regime.max_picks == 0:
+            logger.warning("Market in CRISIS mode - no recommendations today")
+            # Save empty picks for both JP strategies
+            supabase._client.table("daily_picks").upsert({
+                "batch_date": today,
+                "strategy_mode": "jp_conservative",
+                "symbols": [],
+                "pick_count": 0,
+                "market_regime": regime,
+                "status": "published",
+                "market_type": "jp",
+            }, on_conflict="batch_date,strategy_mode").execute()
+            supabase._client.table("daily_picks").upsert({
+                "batch_date": today,
+                "strategy_mode": "jp_aggressive",
+                "symbols": [],
+                "pick_count": 0,
+                "market_regime": regime,
+                "status": "published",
+                "market_type": "jp",
+            }, on_conflict="batch_date,strategy_mode").execute()
+            logger.info("Saved empty daily picks for JP strategies")
+            batch_ctx.metadata = {"market_regime": "crisis", "reason": "VIX too high"}
             BatchLogger.finish(batch_ctx)
             return
 
@@ -408,31 +463,15 @@ def main():
         logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
         logger.info(f"V2 picks: {dual_result.v2_picks}")
 
-        # Build all_scores for compatibility with save_results_jp
-        all_scores = []
-        for v1_score in dual_result.v1_scores:
-            symbol = v1_score.symbol
-            v2_score = next((s for s in dual_result.v2_scores if s.symbol == symbol), None)
-            all_scores.append({
-                "symbol": symbol,
-                "v1_trend": v1_score.trend_score,
-                "v1_momentum": v1_score.momentum_score,
-                "v1_value": v1_score.value_score,
-                "v1_sentiment": v1_score.sentiment_score,
-                "v1_composite": v1_score.composite_score,
-                "v2_momentum": v2_score.momentum_12_1_score if v2_score else 0,
-                "v2_breakout": v2_score.breakout_score if v2_score else 0,
-                "v2_catalyst": v2_score.catalyst_score if v2_score else 0,
-                "v2_risk": v2_score.risk_adjusted_score if v2_score else 0,
-                "v2_composite": v2_score.composite_score if v2_score else 0,
-            })
-
-        v1_picks = dual_result.v1_picks
-        v2_picks = dual_result.v2_picks
-
-        # Save results
+        # Step 4: Save results (same pattern as US version)
         logger.info("Step 4: Saving results...")
-        save_results_jp(supabase, today, regime, vix, all_scores, v1_picks, v2_picks)
+        save_results_jp(
+            supabase=supabase,
+            batch_date=today,
+            market_regime=regime,
+            dual_result=dual_result,
+            v1_stocks_data=v1_stocks_data,
+        )
 
         # Finish batch
         BatchLogger.finish(batch_ctx)
