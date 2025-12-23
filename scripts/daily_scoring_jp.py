@@ -251,10 +251,13 @@ def save_results_jp(
     market_regime: str,
     dual_result,  # DualScoringResult
     v1_stocks_data: list[StockData],
+    v1_final_picks: list[str],
+    v2_final_picks: list[str],
 ):
     """Save scoring results to Supabase with market_type='jp'.
 
     Note: Market regime is saved before this function is called.
+    Uses final picks (after LLM judgment) for daily_picks table.
     Follows same pattern as US version but adds market_type='jp'.
     """
     # Helper to get price for a symbol
@@ -323,30 +326,30 @@ def save_results_jp(
         on_conflict="batch_date,symbol,strategy_mode",
     ).execute()
 
-    # Save V1 daily picks (with market_type)
+    # Save V1 daily picks (with market_type) - uses LLM-filtered final picks
     supabase._client.table("daily_picks").upsert({
         "batch_date": batch_date,
         "strategy_mode": "jp_conservative",
-        "symbols": dual_result.v1_picks,
-        "pick_count": len(dual_result.v1_picks),
+        "symbols": v1_final_picks,
+        "pick_count": len(v1_final_picks),
         "market_regime": market_regime,
         "status": "published",
         "market_type": "jp",
     }, on_conflict="batch_date,strategy_mode").execute()
 
-    # Save V2 daily picks (with market_type)
+    # Save V2 daily picks (with market_type) - uses LLM-filtered final picks
     supabase._client.table("daily_picks").upsert({
         "batch_date": batch_date,
         "strategy_mode": "jp_aggressive",
-        "symbols": dual_result.v2_picks,
-        "pick_count": len(dual_result.v2_picks),
+        "symbols": v2_final_picks,
+        "pick_count": len(v2_final_picks),
         "market_regime": market_regime,
         "status": "published",
         "market_type": "jp",
     }, on_conflict="batch_date,strategy_mode").execute()
 
     logger.info(f"Saved: V1 scores={len(dual_result.v1_scores)}, V2 scores={len(dual_result.v2_scores)}")
-    logger.info(f"Picks: V1={dual_result.v1_picks}, V2={dual_result.v2_picks}")
+    logger.info(f"Final Picks: V1={v1_final_picks}, V2={v2_final_picks}")
 
 
 def main():
@@ -578,7 +581,7 @@ def main():
         else:
             logger.info("LLM judgment disabled, using rule-based picks only")
 
-        # Step 5: Save results
+        # Step 5: Save results (uses final picks after LLM judgment)
         logger.info("Step 5: Saving results...")
         save_results_jp(
             supabase=supabase,
@@ -586,28 +589,9 @@ def main():
             market_regime=regime,
             dual_result=dual_result,
             v1_stocks_data=v1_stocks_data,
+            v1_final_picks=v1_final_picks,
+            v2_final_picks=v2_final_picks,
         )
-
-        # Update daily_picks with LLM-filtered picks (overwrite rule-based)
-        if use_llm_judgment and (v1_final_picks != dual_result.v1_picks or v2_final_picks != dual_result.v2_picks):
-            supabase._client.table("daily_picks").upsert({
-                "batch_date": today,
-                "strategy_mode": "jp_conservative",
-                "symbols": v1_final_picks,
-                "pick_count": len(v1_final_picks),
-                "market_regime": regime,
-                "status": "published",
-                "market_type": "jp",
-            }, on_conflict="batch_date,strategy_mode").execute()
-            supabase._client.table("daily_picks").upsert({
-                "batch_date": today,
-                "strategy_mode": "jp_aggressive",
-                "symbols": v2_final_picks,
-                "pick_count": len(v2_final_picks),
-                "market_regime": regime,
-                "status": "published",
-                "market_type": "jp",
-            }, on_conflict="batch_date,strategy_mode").execute()
 
         # Step 6: Paper Trading - Open positions for picks
         logger.info("Step 6: Opening positions for paper trading...")
