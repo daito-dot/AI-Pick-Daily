@@ -147,16 +147,27 @@ class GeminiClient(LLMClient):
             "max_output_tokens": 8192,
         }
 
-        # Add thinking budget if supported by the model
-        if "gemini-3" in model_name or "gemini-2.5" in model_name:
-            generation_config["thinking_config"] = {
-                "thinking_budget": thinking_budget,
-            }
-
-        response = gemini_model.generate_content(
-            prompt,
-            generation_config=generation_config,
-        )
+        # Try with thinking_config first, fall back to regular generation if not supported
+        try:
+            if "gemini-3" in model_name or "gemini-2.5" in model_name:
+                generation_config["thinking_config"] = {
+                    "thinking_budget": thinking_budget,
+                }
+            response = gemini_model.generate_content(
+                prompt,
+                generation_config=generation_config,
+            )
+        except Exception as e:
+            if "thinking_config" in str(e):
+                # thinking_config not supported, fall back to regular generation
+                logger.warning(f"thinking_config not supported for {model_name}, using regular generation")
+                generation_config.pop("thinking_config", None)
+                response = gemini_model.generate_content(
+                    prompt,
+                    generation_config=generation_config,
+                )
+            else:
+                raise
 
         usage = None
         if hasattr(response, "usage_metadata"):
