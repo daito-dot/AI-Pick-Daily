@@ -328,7 +328,7 @@ def main():
     logger.info("=" * 60)
 
     # Start batch logging
-    batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, notes="Japan stocks")
+    batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING)
 
     try:
         today = datetime.now().strftime("%Y-%m-%d")
