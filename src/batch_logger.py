@@ -12,10 +12,22 @@ from enum import Enum
 from typing import Any, Generator
 from uuid import uuid4
 
-from src.database import get_supabase_client
+from supabase import create_client, Client
+from src.config import config
 
 
 logger = logging.getLogger(__name__)
+
+
+def __get_supabase_client() -> Client:
+    """Get a Supabase client instance."""
+    url = config.supabase.url
+    key = config.supabase.service_role_key or config.supabase.anon_key
+
+    if not url or not key:
+        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
+
+    return create_client(url, key)
 
 
 class BatchType(str, Enum):
@@ -249,7 +261,7 @@ class BatchLogger:
     def _insert_log(ctx: BatchExecutionContext, status: ExecutionStatus) -> None:
         """Insert initial log record."""
         try:
-            supabase = get_supabase_client()
+            supabase = _get_supabase_client()
             supabase.table("batch_execution_logs").insert({
                 "id": ctx.id,
                 "batch_date": ctx.batch_date,
@@ -270,7 +282,7 @@ class BatchLogger:
     ) -> None:
         """Update log record with final status."""
         try:
-            supabase = get_supabase_client()
+            supabase = _get_supabase_client()
 
             update_data = {
                 "status": status.value,
@@ -300,7 +312,7 @@ class BatchLogger:
     def get_today_status() -> list[dict]:
         """Get today's batch execution status."""
         try:
-            supabase = get_supabase_client()
+            supabase = _get_supabase_client()
             today = datetime.utcnow().strftime("%Y-%m-%d")
 
             result = supabase.rpc(
@@ -317,7 +329,7 @@ class BatchLogger:
     def get_recent_failures(days: int = 7) -> list[dict]:
         """Get recent failed batch executions."""
         try:
-            supabase = get_supabase_client()
+            supabase = _get_supabase_client()
 
             result = supabase.table("batch_execution_logs").select(
                 "id, batch_date, batch_type, status, error_message, "
