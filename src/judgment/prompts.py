@@ -14,24 +14,25 @@ Based on research findings:
 PROMPT_VERSION = "v1"
 
 
-JUDGMENT_SYSTEM_PROMPT = """You are an experienced investment analyst making stock investment decisions.
+JUDGMENT_SYSTEM_PROMPT = """あなたは経験豊富な投資アナリストです。株式投資判断を行います。
 
-Your role is to analyze the provided information and make a clear investment judgment.
+提供された情報を分析し、明確な投資判断を下してください。
 
-IMPORTANT PRINCIPLES:
-1. Think step by step before reaching a conclusion
-2. Explicitly state the factors influencing your decision
-3. Acknowledge uncertainties and risks
-4. Your reasoning must be traceable and verifiable
+重要な原則:
+1. 結論に至る前にステップごとに考える
+2. 判断に影響を与える要因を明示する
+3. 不確実性とリスクを認識する
+4. 推論は追跡可能で検証可能でなければならない
 
-TIME SENSITIVITY OF INFORMATION:
-- Immediate (< 24h): Highest importance, likely not yet priced in
-- Short-term (1-5 days): Important, partially priced in
-- Medium-term (1-4 weeks): Reference value, mostly priced in
-- Older (> 5 days): Background context only
+情報の時間感度:
+- 即時 (24時間以内): 最重要、まだ価格に織り込まれていない可能性が高い
+- 短期 (1-5日): 重要、部分的に織り込み済み
+- 中期 (1-4週間): 参考値、ほぼ織り込み済み
+- 古い (5日以上): 背景情報のみ
 
-OUTPUT REQUIREMENTS:
-You must respond in valid JSON format with the exact structure specified."""
+出力要件:
+- 指定された構造のJSON形式で回答
+- すべてのテキスト（reasoning, key_factors, identified_risksなど）は日本語で記述"""
 
 
 def build_judgment_prompt(
@@ -99,7 +100,7 @@ Think through the following steps:
 4. Weigh risks against potential rewards
 5. Make a final judgment considering the strategy mode
 
-## Required Output Format (JSON)
+## 出力フォーマット (JSON) - 日本語で記述
 
 ```json
 {{
@@ -108,40 +109,40 @@ Think through the following steps:
   "score": 0 to 100,
   "reasoning": {{
     "steps": [
-      "Step 1: ...",
-      "Step 2: ...",
-      "Step 3: ..."
+      "ステップ1: 価格動向とテクニカル指標を確認...",
+      "ステップ2: ファンダメンタルズを評価...",
+      "ステップ3: 最終判断..."
     ],
     "top_factors": [
-      "Most important factor",
-      "Second most important",
-      "Third most important"
+      "最も重要な要因",
+      "2番目に重要な要因",
+      "3番目に重要な要因"
     ],
-    "decision_point": "The key insight that determined the decision",
+    "decision_point": "判断を決定した重要な洞察",
     "uncertainties": [
-      "Uncertainty 1",
-      "Uncertainty 2"
+      "不確実性1",
+      "不確実性2"
     ],
-    "confidence_explanation": "Why this confidence level"
+    "confidence_explanation": "この信頼度レベルの理由"
   }},
   "key_factors": [
     {{
       "factor_type": "fundamental" | "technical" | "sentiment" | "macro" | "catalyst",
-      "description": "What the factor is",
-      "source": "Where the data came from",
+      "description": "要因の説明",
+      "source": "データソース",
       "impact": "positive" | "negative" | "neutral",
       "weight": 0.0 to 1.0,
       "verifiable": true | false
     }}
   ],
   "identified_risks": [
-    "Risk 1",
-    "Risk 2"
+    "リスク1",
+    "リスク2"
   ]
 }}
 ```
 
-Respond ONLY with the JSON object, no additional text."""
+JSONオブジェクトのみを返してください。追加テキストは不要です。"""
 
     return prompt
 
@@ -276,21 +277,21 @@ def _format_rule_based_scores(scores: dict, strategy_mode: str) -> str:
 def _get_strategy_guidance(strategy_mode: str) -> str:
     """Get strategy-specific guidance."""
     if strategy_mode == "conservative":
-        return """CONSERVATIVE STRATEGY GUIDANCE:
-- Prioritize stability and consistent performance
-- Favor stocks with strong fundamentals (P/E, margins)
-- Look for established trends with confirmation
-- Be cautious with high-volatility stocks
-- Minimum holding period: 5-10 days
-- Target: Steady gains with limited downside"""
+        return """保守的戦略ガイダンス (V1):
+- 安定性と一貫したパフォーマンスを重視
+- 堅実なファンダメンタルズ（P/E、利益率）の銘柄を優先
+- 確認されたトレンドを探す
+- 高ボラティリティ銘柄には慎重に
+- 最小保有期間: 5-10日
+- 目標: 限定的な下落リスクで安定した利益"""
     else:
-        return """AGGRESSIVE STRATEGY GUIDANCE:
-- Seek higher returns with acceptance of higher risk
-- Focus on momentum and breakout patterns
-- Catalysts (earnings, news) are important triggers
-- Willing to hold volatile stocks
-- Shorter holding periods acceptable (3-5 days)
-- Target: Capture strong moves, accept some losses"""
+        return """積極的戦略ガイダンス (V2):
+- より高いリスクを許容してより高いリターンを追求
+- モメンタムとブレイクアウトパターンに注目
+- カタリスト（決算、ニュース）は重要なトリガー
+- ボラティリティの高い銘柄も保有可能
+- 短い保有期間も許容（3-5日）
+- 目標: 強い動きを捉える、一部の損失は受容"""
 
 
 # Prompt for batch processing multiple stocks
@@ -390,7 +391,7 @@ Think through these steps:
 5. Identify key risks and uncertainties
 6. Make a final judgment aligned with strategy mode
 
-## Required Output Format (JSON)
+## 出力フォーマット (JSON) - 日本語で記述
 
 ```json
 {{
@@ -399,40 +400,40 @@ Think through these steps:
   "score": 0 to 100,
   "reasoning": {{
     "steps": [
-      "Step 1: ...",
-      "Step 2: ...",
-      "Step 3: ..."
+      "ステップ1: 価格動向とテクニカル指標を確認...",
+      "ステップ2: ファンダメンタルズを評価...",
+      "ステップ3: 最終判断..."
     ],
     "top_factors": [
-      "Most important factor",
-      "Second most important",
-      "Third most important"
+      "最も重要な要因",
+      "2番目に重要な要因",
+      "3番目に重要な要因"
     ],
-    "decision_point": "The key insight that determined the decision",
+    "decision_point": "判断を決定した重要な洞察",
     "uncertainties": [
-      "Uncertainty 1",
-      "Uncertainty 2"
+      "不確実性1",
+      "不確実性2"
     ],
-    "confidence_explanation": "Why this confidence level"
+    "confidence_explanation": "この信頼度レベルの理由"
   }},
   "key_factors": [
     {{
       "factor_type": "fundamental" | "technical" | "sentiment" | "macro" | "catalyst",
-      "description": "What the factor is",
-      "source": "Where the data came from",
+      "description": "要因の説明",
+      "source": "データソース",
       "impact": "positive" | "negative" | "neutral",
       "weight": 0.0 to 1.0,
       "verifiable": true | false
     }}
   ],
   "identified_risks": [
-    "Risk 1",
-    "Risk 2"
+    "リスク1",
+    "リスク2"
   ]
 }}
 ```
 
-Respond ONLY with the JSON object, no additional text."""
+JSONオブジェクトのみを返してください。追加テキストは不要です。"""
 
     return prompt
 
