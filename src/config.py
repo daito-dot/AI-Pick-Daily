@@ -54,8 +54,9 @@ class LLMConfig:
     provider: Literal["gemini", "claude"] = "gemini"
     scoring_model: str = "gemini-2.5-flash-lite"
     analysis_model: str = "gemini-3-flash"  # For judgment (Layer 2)
-    reflection_model: str = "gemini-2.5-pro"  # For reflection (Layer 3)
-    deep_research_model: str = "gemini-2.5-pro"  # For deep research (Layer 4)
+    reflection_model: str = "gemini-3-pro"  # For reflection (Layer 3)
+    deep_research_model: str = "gemini-3-pro"  # For deep research (Layer 4) - fallback
+    deep_research_agent: str = "deep-research-pro-preview-12-2025"  # Deep Research agent
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
     # Feature flags
@@ -100,8 +101,9 @@ def load_config() -> Config:
             provider=os.getenv("LLM_PROVIDER", "gemini"),  # type: ignore
             scoring_model=os.getenv("SCORING_MODEL", "gemini-2.5-flash-lite"),
             analysis_model=os.getenv("ANALYSIS_MODEL", "gemini-3-flash"),
-            reflection_model=os.getenv("REFLECTION_MODEL", "gemini-2.5-pro"),
-            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", "gemini-2.5-pro"),
+            reflection_model=os.getenv("REFLECTION_MODEL", "gemini-3-pro"),
+            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", "gemini-3-pro"),
+            deep_research_agent=os.getenv("DEEP_RESEARCH_AGENT", "deep-research-pro-preview-12-2025"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             enable_judgment=os.getenv("ENABLE_JUDGMENT", "true").lower() == "true",

@@ -80,6 +80,75 @@ class DeepResearchService:
         """
         self.llm_client = llm_client or get_llm_client()
         self.model_name = config.llm.deep_research_model
+        self._use_deep_research_agent = True  # Use Interactions API agent
+
+    def run_deep_research_query(
+        self,
+        query: str,
+        timeout_minutes: int = 30,
+    ) -> str:
+        """
+        Run a single deep research query using Gemini Deep Research agent.
+
+        Uses the Interactions API with `deep-research-pro-preview-12-2025`.
+        Best for comprehensive research questions that require web search
+        and multi-step reasoning.
+
+        Args:
+            query: The research query
+            timeout_minutes: Maximum wait time
+
+        Returns:
+            Research report as text
+
+        Example queries:
+            - "Analyze the current state of AI chip manufacturers and their competitive positions"
+            - "Research the impact of interest rate changes on tech stock valuations in 2024"
+            - "Investigate Tesla's competitive advantages and threats in the EV market"
+        """
+        logger.info(f"Running Deep Research query: {query[:100]}...")
+
+        try:
+            # Use the deep_research method from GeminiClient
+            response = self.llm_client.deep_research(
+                query=query,
+                timeout_minutes=timeout_minutes,
+            )
+
+            logger.info(
+                f"Deep Research completed. "
+                f"Duration: {response.usage.get('duration_seconds', 0)/60:.1f} min"
+            )
+
+            return response.content
+
+        except ImportError as e:
+            logger.warning(f"Deep Research agent unavailable: {e}")
+            logger.info("Falling back to gemini-3-pro")
+
+            # Fallback to standard generation
+            prompt = f"""Conduct comprehensive research on the following topic:
+
+{query}
+
+Provide a detailed, well-structured report with:
+1. Executive summary
+2. Key findings
+3. Supporting evidence
+4. Implications
+5. Recommendations
+
+Be thorough and cite specific data points where possible."""
+
+            response = self.llm_client.generate(
+                prompt=prompt,
+                model=self.model_name,
+            )
+            return response.content
+
+        except Exception as e:
+            logger.error(f"Deep Research failed: {e}")
+            raise
 
     def run_weekly_research(
         self,

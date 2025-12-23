@@ -48,7 +48,7 @@ jobs:
       - name: Run weekly reflection
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
-          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-2.5-pro' }}
+          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -89,7 +89,7 @@ jobs:
       - name: Run weekly research
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
-          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-2.5-pro' }}
+          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

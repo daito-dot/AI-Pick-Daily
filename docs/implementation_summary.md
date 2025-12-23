@@ -95,12 +95,18 @@
 **config.py更新**:
 ```python
 # 新規設定
-reflection_model: str = "gemini-2.5-pro"
-deep_research_model: str = "gemini-2.5-pro"
+reflection_model: str = "gemini-3-pro"  # 2.5-proより高性能・低コスト
+deep_research_model: str = "gemini-3-pro"
 enable_judgment: bool = True
 enable_reflection: bool = True
 judgment_thinking_budget: int = 4096
 ```
+
+**Deep Researchエージェント**: `deep-research-pro-preview-12-2025`をInteractions API経由で利用。
+- `config.llm.deep_research_agent`で設定可能
+- `src/llm/gemini_client.py`の`deep_research()`メソッドで実装
+- `src/research/service.py`の`run_deep_research_query()`で利用可能
+- フォールバック: google-genaiパッケージ未インストール時は`gemini-3-pro`で代替
 
 ---
 
