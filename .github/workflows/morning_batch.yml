@@ -80,7 +80,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ENABLE_JUDGMENT: ${{ vars.ENABLE_JUDGMENT || 'true' }}
-          JUDGMENT_THINKING_BUDGET: ${{ vars.JUDGMENT_THINKING_BUDGET || '4096' }}
+          JUDGMENT_THINKING_LEVEL: ${{ vars.JUDGMENT_THINKING_LEVEL || 'low' }}
           DEBUG: ${{ github.event.inputs.debug || 'false' }}
         run: |
           python scripts/daily_scoring.py
