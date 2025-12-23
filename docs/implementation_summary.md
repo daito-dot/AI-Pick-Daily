@@ -99,7 +99,7 @@ reflection_model: str = "gemini-3-pro"  # 2.5-proより高性能・低コスト
 deep_research_model: str = "gemini-3-pro"
 enable_judgment: bool = True
 enable_reflection: bool = True
-judgment_thinking_budget: int = 4096
+judgment_thinking_level: str = "low"  # minimal, low, medium, high
 ```
 
 **Deep Researchエージェント**: `deep-research-pro-preview-12-2025`をInteractions API経由で利用。

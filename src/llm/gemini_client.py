@@ -123,51 +123,95 @@ class GeminiClient(LLMClient):
         self,
         prompt: str,
         model: str | None = None,
-        thinking_budget: int = 8192,
+        thinking_level: str = "low",
     ) -> LLMResponse:
         """
         Generate a response using Gemini's thinking mode.
 
-        For Gemini 3 Flash, this enables the model's reasoning capabilities.
+        For Gemini 3 models, uses thinking_level parameter via new SDK.
+        Falls back to regular generation for unsupported models.
 
         Args:
             prompt: The input prompt
             model: Model to use (defaults to analysis_model)
-            thinking_budget: Token budget for thinking process
+            thinking_level: Thinking depth - "minimal", "low", "medium", "high"
+                           (minimal/medium only for Gemini 3 Flash)
 
         Returns:
             LLMResponse with the generated content
         """
         model_name = model or self._analysis_model
+
+        # Use new SDK for Gemini 3 models with thinking_level support
+        if "gemini-3" in model_name:
+            return self._generate_with_thinking_new_sdk(prompt, model_name, thinking_level)
+
+        # Fall back to old SDK for other models
+        return self._generate_with_thinking_old_sdk(prompt, model_name)
+
+    def _generate_with_thinking_new_sdk(
+        self,
+        prompt: str,
+        model_name: str,
+        thinking_level: str,
+    ) -> LLMResponse:
+        """Use new google.genai SDK for Gemini 3 thinking mode."""
+        try:
+            from google import genai as genai_new
+            from google.genai import types
+        except ImportError:
+            logger.warning("google-genai not installed, falling back to regular generation")
+            return self._generate_with_thinking_old_sdk(prompt, model_name)
+
+        api_key = config.llm.gemini_api_key
+        client = genai_new.Client(api_key=api_key)
+
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
+                    temperature=0.7,
+                    max_output_tokens=8192,
+                ),
+            )
+
+            usage = None
+            if hasattr(response, "usage_metadata"):
+                usage = {
+                    "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                    "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                    "total_tokens": getattr(response.usage_metadata, "total_token_count", 0),
+                }
+
+            return LLMResponse(
+                content=response.text,
+                model=model_name,
+                usage=usage,
+                raw_response=response,
+            )
+        except Exception as e:
+            logger.warning(f"Thinking mode failed for {model_name}: {e}, falling back")
+            return self._generate_with_thinking_old_sdk(prompt, model_name)
+
+    def _generate_with_thinking_old_sdk(
+        self,
+        prompt: str,
+        model_name: str,
+    ) -> LLMResponse:
+        """Fall back to regular generation using old SDK."""
         gemini_model = genai.GenerativeModel(model_name)
 
-        # Configure thinking mode for Gemini 3 Flash
         generation_config = {
             "temperature": 0.7,
             "max_output_tokens": 8192,
         }
 
-        # Try with thinking_config first, fall back to regular generation if not supported
-        try:
-            if "gemini-3" in model_name or "gemini-2.5" in model_name:
-                generation_config["thinking_config"] = {
-                    "thinking_budget": thinking_budget,
-                }
-            response = gemini_model.generate_content(
-                prompt,
-                generation_config=generation_config,
-            )
-        except Exception as e:
-            if "thinking_config" in str(e):
-                # thinking_config not supported, fall back to regular generation
-                logger.warning(f"thinking_config not supported for {model_name}, using regular generation")
-                generation_config.pop("thinking_config", None)
-                response = gemini_model.generate_content(
-                    prompt,
-                    generation_config=generation_config,
-                )
-            else:
-                raise
+        response = gemini_model.generate_content(
+            prompt,
+            generation_config=generation_config,
+        )
 
         usage = None
         if hasattr(response, "usage_metadata"):

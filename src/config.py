@@ -62,7 +62,7 @@ class LLMConfig:
     # Feature flags
     enable_judgment: bool = True  # Enable LLM-based judgment (Layer 2)
     enable_reflection: bool = True  # Enable reflection analysis (Layer 3)
-    judgment_thinking_budget: int = 4096  # Token budget for CoT reasoning
+    judgment_thinking_level: str = "low"  # Thinking depth: minimal, low, medium, high
 
 
 @dataclass
@@ -108,7 +108,7 @@ def load_config() -> Config:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             enable_judgment=os.getenv("ENABLE_JUDGMENT", "true").lower() == "true",
             enable_reflection=os.getenv("ENABLE_REFLECTION", "true").lower() == "true",
-            judgment_thinking_budget=int(os.getenv("JUDGMENT_THINKING_BUDGET", "4096")),
+            judgment_thinking_level=os.getenv("JUDGMENT_THINKING_LEVEL", "low"),
         ),
         finnhub=FinnhubConfig(
             api_key=os.getenv("FINNHUB_API_KEY"),

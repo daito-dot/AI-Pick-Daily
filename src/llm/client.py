@@ -52,7 +52,7 @@ class LLMClient(ABC):
         self,
         prompt: str,
         model: str | None = None,
-        thinking_budget: int = 8192,
+        thinking_level: str = "low",
     ) -> LLMResponse:
         """
         Generate a response using thinking/reasoning mode.
@@ -60,7 +60,7 @@ class LLMClient(ABC):
         Args:
             prompt: The input prompt
             model: Model to use (defaults to analysis_model from config)
-            thinking_budget: Token budget for thinking (Gemini 3 Flash)
+            thinking_level: Thinking depth - "minimal", "low", "medium", "high"
 
         Returns:
             LLMResponse with the generated content

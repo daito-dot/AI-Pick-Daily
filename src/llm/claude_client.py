@@ -44,7 +44,7 @@ class ClaudeClient(LLMClient):
         self,
         prompt: str,
         model: str | None = None,
-        thinking_budget: int = 8192,
+        thinking_level: str = "low",
     ) -> LLMResponse:
         """Generate a response using Claude's extended thinking."""
         raise NotImplementedError("Claude client is not yet implemented")

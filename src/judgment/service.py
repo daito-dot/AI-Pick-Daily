@@ -82,7 +82,7 @@ class JudgmentService:
             response = self.llm_client.generate_with_thinking(
                 prompt=full_prompt,
                 model=self.model_name,
-                thinking_budget=4096,  # Allow substantial reasoning
+                thinking_level="low",  # Balance between reasoning depth and speed
             )
 
             logger.debug(f"LLM response for {symbol}: {len(response.content)} chars")
