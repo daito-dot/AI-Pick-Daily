@@ -100,9 +100,9 @@ def load_config() -> Config:
         llm=LLMConfig(
             provider=os.getenv("LLM_PROVIDER", "gemini"),  # type: ignore
             scoring_model=os.getenv("SCORING_MODEL", "gemini-2.5-flash-lite"),
-            analysis_model=os.getenv("ANALYSIS_MODEL", "gemini-3-flash"),
-            reflection_model=os.getenv("REFLECTION_MODEL", "gemini-3-pro"),
-            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", "gemini-3-pro"),
+            analysis_model=os.getenv("ANALYSIS_MODEL", "gemini-3-flash-preview"),
+            reflection_model=os.getenv("REFLECTION_MODEL", "gemini-3-pro-preview"),
+            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", "gemini-3-pro-preview"),
             deep_research_agent=os.getenv("DEEP_RESEARCH_AGENT", "deep-research-pro-preview-12-2025"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),

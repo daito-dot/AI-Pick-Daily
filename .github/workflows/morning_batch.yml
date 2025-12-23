@@ -72,9 +72,9 @@ jobs:
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
           SCORING_MODEL: ${{ vars.SCORING_MODEL || 'gemini-2.5-flash-lite' }}
-          ANALYSIS_MODEL: ${{ vars.ANALYSIS_MODEL || 'gemini-3-flash' }}
-          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro' }}
-          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro' }}
+          ANALYSIS_MODEL: ${{ vars.ANALYSIS_MODEL || 'gemini-3-flash-preview' }}
+          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro-preview' }}
+          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro-preview' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
