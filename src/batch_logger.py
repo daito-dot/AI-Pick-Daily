@@ -19,7 +19,7 @@ from src.config import config
 logger = logging.getLogger(__name__)
 
 
-def __get_supabase_client() -> Client:
+def _get_supabase_client() -> Client:
     """Get a Supabase client instance."""
     url = config.supabase.url
     key = config.supabase.service_role_key or config.supabase.anon_key
