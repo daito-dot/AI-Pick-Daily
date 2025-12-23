@@ -359,70 +359,76 @@ def main():
             BatchLogger.finish(batch_ctx)
             return
 
-        # Fetch and score stocks
-        logger.info("Step 2: Fetching and scoring Japanese stocks...")
-
-        all_scores = []
-        failed_count = 0
+        # Step 2: Fetch stock data for all JP stocks
+        logger.info("Step 2: Fetching Japanese stock data...")
+        v1_stocks_data = []
+        v2_stocks_data = []
+        failed_symbols = []
 
         batch_ctx.total_items = len(JP_STOCK_SYMBOLS)
 
         for i, symbol in enumerate(JP_STOCK_SYMBOLS):
-            logger.info(f"Processing {symbol} ({i+1}/{len(JP_STOCK_SYMBOLS)})")
+            logger.info(f"Fetching {symbol} ({i+1}/{len(JP_STOCK_SYMBOLS)})")
 
             stock_data, v2_data = fetch_stock_data_jp(yf_client, symbol)
 
-            if stock_data is None or v2_data is None:
-                failed_count += 1
-                continue
+            if stock_data is not None and v2_data is not None:
+                v1_stocks_data.append(stock_data)
+                v2_stocks_data.append(v2_data)
+            else:
+                failed_symbols.append(symbol)
 
-            # Run dual scoring
-            try:
-                v1_scores, v2_scores = run_dual_scoring(stock_data, v2_data, regime)
-
-                all_scores.append({
-                    "symbol": symbol,
-                    "v1_trend": v1_scores.get("trend_score", 0),
-                    "v1_momentum": v1_scores.get("momentum_score", 0),
-                    "v1_value": v1_scores.get("value_score", 0),
-                    "v1_sentiment": v1_scores.get("sentiment_score", 50),
-                    "v1_composite": v1_scores.get("composite_score", 0),
-                    "v2_momentum": v2_scores.get("momentum_12_1_score", 0),
-                    "v2_breakout": v2_scores.get("breakout_score", 0),
-                    "v2_catalyst": v2_scores.get("catalyst_score", 0),
-                    "v2_risk": v2_scores.get("risk_adjusted_score", 0),
-                    "v2_composite": v2_scores.get("composite_score", 0),
-                })
-
-                batch_ctx.processed_items = i + 1 - failed_count
-
-            except Exception as e:
-                logger.error(f"{symbol}: Scoring failed: {e}")
-                failed_count += 1
+            batch_ctx.processed_items = i + 1
 
             # Rate limiting
-            time.sleep(0.5)
+            time.sleep(0.3)
 
-        logger.info(f"Scored {len(all_scores)} stocks, {failed_count} failed")
+        logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
+        if failed_symbols:
+            logger.warning(f"Failed to fetch {len(failed_symbols)} stocks")
 
-        # Select top picks
-        logger.info("Step 3: Selecting top picks...")
+        # Ensure minimum data
+        MIN_STOCKS_REQUIRED = 10
+        if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
+            error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)"
+            logger.error(f"FATAL: {error_msg}")
+            BatchLogger.finish(batch_ctx, error=error_msg)
+            sys.exit(1)
 
-        # V1: Top 5 by composite score (threshold 60)
-        v1_sorted = sorted(all_scores, key=lambda x: x["v1_composite"], reverse=True)
-        v1_picks = [s["symbol"] for s in v1_sorted if s["v1_composite"] >= 60][:5]
+        # Step 3: Run dual scoring (same as US version)
+        logger.info("Step 3: Running dual scoring pipeline...")
+        dual_result = run_dual_scoring(
+            v1_stocks_data,
+            v2_stocks_data,
+            market_regime,
+        )
 
-        # V2: Top 3 by composite score (threshold 75)
-        v2_sorted = sorted(all_scores, key=lambda x: x["v2_composite"], reverse=True)
-        v2_picks = [s["symbol"] for s in v2_sorted if s["v2_composite"] >= 75][:3]
+        logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
+        logger.info(f"V1 picks: {dual_result.v1_picks}")
+        logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
+        logger.info(f"V2 picks: {dual_result.v2_picks}")
 
-        # Adjust for regime
-        if regime == "adjustment":
-            v1_picks = v1_picks[:3]
-            v2_picks = v2_picks[:2]
+        # Build all_scores for compatibility with save_results_jp
+        all_scores = []
+        for v1_score in dual_result.v1_scores:
+            symbol = v1_score.symbol
+            v2_score = next((s for s in dual_result.v2_scores if s.symbol == symbol), None)
+            all_scores.append({
+                "symbol": symbol,
+                "v1_trend": v1_score.trend_score,
+                "v1_momentum": v1_score.momentum_score,
+                "v1_value": v1_score.value_score,
+                "v1_sentiment": v1_score.sentiment_score,
+                "v1_composite": v1_score.composite_score,
+                "v2_momentum": v2_score.momentum_12_1_score if v2_score else 0,
+                "v2_breakout": v2_score.breakout_score if v2_score else 0,
+                "v2_catalyst": v2_score.catalyst_score if v2_score else 0,
+                "v2_risk": v2_score.risk_adjusted_score if v2_score else 0,
+                "v2_composite": v2_score.composite_score if v2_score else 0,
+            })
 
-        logger.info(f"V1 (Conservative) picks: {v1_picks}")
-        logger.info(f"V2 (Aggressive) picks: {v2_picks}")
+        v1_picks = dual_result.v1_picks
+        v2_picks = dual_result.v2_picks
 
         # Save results
         logger.info("Step 4: Saving results...")
