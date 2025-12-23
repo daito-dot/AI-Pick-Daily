@@ -72,9 +72,8 @@ def fix_portfolio_cash():
         cumulative_pnl = correct_total - INITIAL_CAPITAL
         cumulative_pnl_pct = (cumulative_pnl / INITIAL_CAPITAL) * 100
 
-        # Alpha = cumulative return - S&P500 cumulative return
-        # Since we don't track S&P500 properly yet, reset to 0
-        sp500_cumulative_pct = 0.0
+        # Preserve existing S&P500 cumulative (tracked by daily_review.py)
+        sp500_cumulative_pct = float(current.get("sp500_cumulative_pct", 0)) if current else 0.0
         alpha = cumulative_pnl_pct - sp500_cumulative_pct
 
         print(f"  Cumulative PnL: {cumulative_pnl_pct:.2f}%")

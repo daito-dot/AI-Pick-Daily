@@ -572,20 +572,28 @@ def main():
             logger.info(f"Closed {len(trades)} positions")
         else:
             logger.info("No exit signals triggered")
-
-        # Update portfolio snapshots
-        logger.info("Updating portfolio snapshots...")
-        for strategy in ["conservative", "aggressive"]:
-            closed_today = len([s for s in exit_signals if s.position.strategy_mode == strategy]) if exit_signals else 0
-            try:
-                portfolio.update_portfolio_snapshot(
-                    strategy_mode=strategy,
-                    closed_today=closed_today,
-                )
-            except Exception as e:
-                logger.error(f"Failed to update snapshot for {strategy}: {e}")
     else:
         logger.info("No open positions to evaluate")
+
+    # Get S&P500 daily return for benchmark (always track regardless of positions)
+    sp500_daily_pct = yf_client.get_sp500_daily_return()
+    if sp500_daily_pct is not None:
+        logger.info(f"S&P500 daily return: {sp500_daily_pct:+.2f}%")
+    else:
+        logger.warning("Could not get S&P500 daily return")
+
+    # Update portfolio snapshots (always update for S&P500 tracking)
+    logger.info("Updating portfolio snapshots...")
+    for strategy in ["conservative", "aggressive"]:
+        closed_today = len([s for s in exit_signals if s.position.strategy_mode == strategy]) if exit_signals else 0
+        try:
+            portfolio.update_portfolio_snapshot(
+                strategy_mode=strategy,
+                closed_today=closed_today,
+                sp500_daily_pct=sp500_daily_pct,
+            )
+        except Exception as e:
+            logger.error(f"Failed to update snapshot for {strategy}: {e}")
 
     # 4. Generate AI reflection (focus on 5-day results)
     if not results_5d.get("error"):

@@ -206,6 +206,30 @@ class YFinanceClient:
         quote = self.get_quote("SPY")
         return quote.current_price if quote else None
 
+    def get_sp500_daily_return(self) -> float | None:
+        """
+        Get S&P 500 daily return percentage.
+
+        Returns:
+            Daily return as percentage (e.g., 1.5 for +1.5%) or None if failed
+        """
+        def _fetch():
+            ticker = yf.Ticker("SPY")
+            hist = ticker.history(period="5d")
+            if len(hist) < 2:
+                return None
+            prev_close = float(hist["Close"].iloc[-2])
+            curr_close = float(hist["Close"].iloc[-1])
+            if prev_close <= 0:
+                return None
+            return ((curr_close - prev_close) / prev_close) * 100
+
+        try:
+            return _retry_with_backoff(_fetch)
+        except Exception as e:
+            logger.error(f"yfinance failed to get S&P500 daily return: {e}")
+            return None
+
     def get_basic_financials(self, symbol: str) -> dict[str, Any] | None:
         """
         Get basic financial metrics.
