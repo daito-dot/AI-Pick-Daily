@@ -754,3 +754,85 @@ export async function getLatestReflection(
     return null;
   }
 }
+
+// ============================================
+// System Status (Batch Execution Logs)
+// ============================================
+
+import type { BatchExecutionLog, SystemStatus, BatchType } from '@/types';
+
+/**
+ * Fetch today's batch execution status
+ */
+export async function getTodayBatchStatus(): Promise<SystemStatus> {
+  try {
+    const supabase = getSupabase();
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data, error } = await supabase
+      .from('batch_execution_logs')
+      .select('*')
+      .eq('batch_date', today)
+      .order('started_at', { ascending: false });
+
+    if (error) {
+      console.error('[getTodayBatchStatus] error:', error);
+      return {
+        morningScoring: null,
+        llmJudgment: null,
+        eveningReview: null,
+        weeklyResearch: null,
+      };
+    }
+
+    // Get latest of each type
+    const logs = data || [];
+    const findLatest = (type: BatchType): BatchExecutionLog | null => {
+      return logs.find(log => log.batch_type === type) || null;
+    };
+
+    return {
+      morningScoring: findLatest('morning_scoring'),
+      llmJudgment: findLatest('llm_judgment'),
+      eveningReview: findLatest('evening_review'),
+      weeklyResearch: findLatest('weekly_research'),
+    };
+  } catch (error) {
+    console.error('getTodayBatchStatus error:', error);
+    return {
+      morningScoring: null,
+      llmJudgment: null,
+      eveningReview: null,
+      weeklyResearch: null,
+    };
+  }
+}
+
+/**
+ * Fetch recent batch execution failures
+ */
+export async function getRecentBatchFailures(days: number = 7): Promise<BatchExecutionLog[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data, error } = await supabase
+      .from('batch_execution_logs')
+      .select('*')
+      .in('status', ['failed', 'partial_success'])
+      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .order('started_at', { ascending: false })
+      .limit(20);
+
+    if (error) {
+      console.error('[getRecentBatchFailures] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getRecentBatchFailures error:', error);
+    return [];
+  }
+}

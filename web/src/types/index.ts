@@ -186,3 +186,38 @@ export interface DashboardData {
   vixLevel: number;
   lastUpdated: string;
 }
+
+// Batch execution status types
+export type BatchType =
+  | 'morning_scoring'
+  | 'evening_review'
+  | 'weekly_research'
+  | 'llm_judgment'
+  | 'reflection';
+
+export type ExecutionStatus = 'running' | 'success' | 'partial_success' | 'failed';
+
+export interface BatchExecutionLog {
+  id: string;
+  batch_date: string;
+  batch_type: BatchType;
+  status: ExecutionStatus;
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  total_items: number;
+  successful_items: number;
+  failed_items: number;
+  error_message: string | null;
+  error_details: { errors: Array<{ error: string; item_id?: string }> } | null;
+  model_used: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface SystemStatus {
+  morningScoring: BatchExecutionLog | null;
+  llmJudgment: BatchExecutionLog | null;
+  eveningReview: BatchExecutionLog | null;
+  weeklyResearch: BatchExecutionLog | null;
+}

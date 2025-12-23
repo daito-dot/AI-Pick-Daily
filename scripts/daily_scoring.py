@@ -44,6 +44,7 @@ from src.judgment import (
     run_judgment_for_candidates,
     filter_picks_by_judgment,
 )
+from src.batch_logger import BatchLogger, BatchType
 
 
 class DataFetchError(Exception):
@@ -377,6 +378,9 @@ def main():
         logger.error(f"Failed to initialize clients: {e}")
         sys.exit(1)
 
+    # Track batch execution
+    batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, model=config.llm.scoring_model)
+
     # 1. Determine market regime
     logger.info("Step 1: Determining market regime...")
     try:
@@ -384,6 +388,7 @@ def main():
     except DataFetchError as e:
         logger.error(f"FATAL: Cannot fetch market regime data: {e}")
         logger.error("Batch failed - no data sources available")
+        BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
     market_regime = decide_market_regime(
@@ -430,6 +435,8 @@ def main():
             status="published",
         ))
         logger.info("Saved empty daily picks for both strategies")
+        batch_ctx.metadata = {"market_regime": "crisis", "reason": "VIX too high"}
+        BatchLogger.finish(batch_ctx)
         return
 
     # 2. Filter candidates
@@ -462,8 +469,12 @@ def main():
     # Ensure we have enough data to make recommendations
     MIN_STOCKS_REQUIRED = 10
     if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
-        logger.error(f"FATAL: Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)")
+        error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)"
+        logger.error(f"FATAL: {error_msg}")
         logger.error("Batch failed - insufficient data for reliable recommendations")
+        batch_ctx.failed_items = len(failed_symbols)
+        batch_ctx.successful_items = len(v1_stocks_data)
+        BatchLogger.finish(batch_ctx, error=error_msg)
         sys.exit(1)
 
     # 4. Fetch dynamic thresholds from database (FEEDBACK LOOP)
@@ -504,6 +515,12 @@ def main():
     v2_final_picks = dual_result.v2_picks
 
     if use_llm_judgment:
+        # Track LLM judgment separately
+        judgment_ctx = BatchLogger.start(
+            BatchType.LLM_JUDGMENT,
+            model=config.llm.analysis_model
+        )
+
         try:
             judgment_service = JudgmentService()
 
@@ -563,8 +580,15 @@ def main():
             logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
             logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
 
+            # Track judgment results
+            judgment_ctx.successful_items = len(v1_judgments) + len(v2_judgments)
+            judgment_ctx.total_items = 20  # 10 per strategy
+            judgment_ctx.failed_items = 20 - judgment_ctx.successful_items
+            BatchLogger.finish(judgment_ctx)
+
         except Exception as e:
             logger.error(f"LLM judgment failed, using rule-based picks: {e}")
+            BatchLogger.finish(judgment_ctx, error=str(e))
             # Fall back to rule-based picks
             v1_final_picks = dual_result.v1_picks
             v2_final_picks = dual_result.v2_picks
@@ -718,6 +742,20 @@ def main():
 
     else:
         logger.info("Skipping position opening - market in crisis mode")
+
+    # Record batch completion stats
+    batch_ctx.successful_items = len(v1_stocks_data)
+    batch_ctx.failed_items = len(failed_symbols)
+    batch_ctx.total_items = len(candidates)
+    batch_ctx.metadata = {
+        "v1_picks": v1_final_picks,
+        "v2_picks": v2_final_picks,
+        "market_regime": market_regime.regime.value,
+        "llm_judgment_enabled": use_llm_judgment,
+    }
+
+    # Finish batch logging
+    BatchLogger.finish(batch_ctx)
 
     logger.info("=" * 50)
     logger.info("Daily scoring batch completed successfully")

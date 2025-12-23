@@ -1,7 +1,8 @@
-import { getTodayPicks, getTodayJudgments } from '@/lib/supabase';
+import { getTodayPicks, getTodayJudgments, getTodayBatchStatus } from '@/lib/supabase';
 import { StockCard } from '@/components/StockCard';
 import { MarketRegimeStatus } from '@/components/MarketRegimeStatus';
 import { JudgmentPanel } from '@/components/JudgmentPanel';
+import { SystemStatusPanel } from '@/components/SystemStatus';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import type { StockScore, StrategyModeType } from '@/types';
@@ -119,9 +120,10 @@ function StrategySection({ strategyMode, picks, scores }: StrategyCardProps) {
 }
 
 export default async function HomePage() {
-  const [picksData, judgments] = await Promise.all([
+  const [picksData, judgments, batchStatus] = await Promise.all([
     getTodayPicks(),
     getTodayJudgments(),
+    getTodayBatchStatus(),
   ]);
 
   const {
@@ -205,6 +207,11 @@ export default async function HomePage() {
           <JudgmentPanel judgments={judgments} />
         </div>
       )}
+
+      {/* System Status Panel */}
+      <div className="mt-8">
+        <SystemStatusPanel status={batchStatus} />
+      </div>
 
       {/* Full Scores Table */}
       {(conservativeScores.length > 0 || aggressiveScores.length > 0) && (
