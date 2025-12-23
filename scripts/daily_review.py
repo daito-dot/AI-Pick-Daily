@@ -480,7 +480,7 @@ def main():
         llm = get_llm_client()
     except Exception as e:
         logger.error(f"Failed to initialize clients: {e}")
-        BatchLogger.finish(batch_ctx, success=False, error_message=str(e))
+        BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
     # 1. Calculate returns for ALL stocks (5-day review)
@@ -613,16 +613,11 @@ def main():
     logger.info("=" * 60)
 
     # Finish batch logging
-    total_items = results_5d.get("total_stocks", 0) if not results_5d.get("error") else 0
-    successful_items = results_5d.get("successful", 0) if not results_5d.get("error") else 0
-    failed_items = results_5d.get("failed", 0) if not results_5d.get("error") else 0
-    BatchLogger.finish(
-        batch_ctx,
-        success=True,
-        total_items=total_items,
-        successful_items=successful_items,
-        failed_items=failed_items,
-    )
+    if not results_5d.get("error"):
+        batch_ctx.total_items = results_5d.get("total_stocks", 0)
+        batch_ctx.successful_items = results_5d.get("successful", 0)
+        batch_ctx.failed_items = results_5d.get("failed", 0)
+    BatchLogger.finish(batch_ctx)
 
 
 if __name__ == "__main__":

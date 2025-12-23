@@ -50,14 +50,14 @@ def main():
     # Check if reflection is enabled
     if not config.llm.enable_reflection:
         logger.info("Reflection is disabled in config, exiting")
-        BatchLogger.finish(batch_ctx, success=True, total_items=0)
+        BatchLogger.finish(batch_ctx)
         return
 
     try:
         reflection_service = ReflectionService()
     except Exception as e:
         logger.error(f"Failed to initialize reflection service: {e}")
-        BatchLogger.finish(batch_ctx, success=False, error_message=str(e))
+        BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
     # Run for both strategies
@@ -117,13 +117,10 @@ def main():
     logger.info("=" * 50)
 
     # Finish batch logging
-    BatchLogger.finish(
-        batch_ctx,
-        success=failed_strategies == 0,
-        total_items=2,  # 2 strategies
-        successful_items=successful_strategies,
-        failed_items=failed_strategies,
-    )
+    batch_ctx.total_items = 2  # 2 strategies
+    batch_ctx.successful_items = successful_strategies
+    batch_ctx.failed_items = failed_strategies
+    BatchLogger.finish(batch_ctx)
 
 
 if __name__ == "__main__":
