@@ -131,7 +131,7 @@ function KeyFactorsList({ factors }: { factors: KeyFactor[] }) {
   );
 }
 
-function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'] }) {
+function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'] | null }) {
   const [expanded, setExpanded] = useState(false);
 
   if (!reasoning) {
