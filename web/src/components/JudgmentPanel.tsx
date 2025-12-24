@@ -1,7 +1,32 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, memo, useMemo, useCallback } from 'react';
 import type { JudgmentRecord, KeyFactor, FactorImpact } from '@/types';
+// Tooltip component for terminology explanations
+function Tooltip({ term, children }: { term: string; children: React.ReactNode }) {
+  const definitions: Record<string, string> = {
+    'confidence': 'AIがこの判断にどれだけ自信を持っているかを表します（0-100%）',
+    'composite_score': '複数の評価指標を組み合わせた総合スコアです',
+    'momentum': '株価の勢い・トレンドの強さを表します',
+    'breakout': '過去の高値を突破する可能性を示します',
+    'catalyst': '決算発表など株価を動かす材料の有無を評価します',
+    'trend': '株価が上昇傾向か下降傾向かを示します',
+    'value': '株価が割安かどうかを評価します',
+    'sentiment': '市場参加者の心理・ニュースの雰囲気を評価します',
+    'risk': 'リターンに対するリスクの度合いを評価します',
+    'percentile': '全銘柄の中での順位（上位何%か）を示します',
+  };
+
+  return (
+    <span className="relative group cursor-help underline decoration-dotted">
+      {children}
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 pointer-events-none">
+        {definitions[term] || term}
+      </span>
+    </span>
+  );
+}
+
 
 // Helper to safely parse JSON fields that might be stored as strings (possibly double-encoded)
 function safeParseJson<T>(value: T | string | null | undefined, fallback: T): T {
@@ -54,6 +79,9 @@ interface RuleBasedScore {
 
 interface JudgmentPanelProps {
   judgments: JudgmentRecord[];
+  isLoading?: boolean;
+  error?: Error | null;
+  onRetry?: () => void;
   title?: string;
   finalPicks?: {
     conservative: string[];
@@ -74,7 +102,13 @@ interface JudgmentPanelProps {
   isJapan?: boolean;
 }
 
-function DecisionBadge({ decision, confidence }: { decision: string; confidence: number }) {
+// Memoized DecisionBadge component
+interface DecisionBadgeProps {
+  decision: string;
+  confidence: number;
+}
+
+const DecisionBadge = memo(function DecisionBadge({ decision, confidence }: DecisionBadgeProps) {
   const config = {
     buy: { label: 'BUY', bgColor: 'bg-green-100', textColor: 'text-green-800', borderColor: 'border-green-300' },
     hold: { label: 'HOLD', bgColor: 'bg-yellow-100', textColor: 'text-yellow-800', borderColor: 'border-yellow-300' },
@@ -90,10 +124,10 @@ function DecisionBadge({ decision, confidence }: { decision: string; confidence:
       </span>
     </div>
   );
-}
+});
 
-function ConfidenceBar({ confidence }: { confidence: number }) {
-  const percent = confidence * 100;
+// Memoized ConfidenceBar component
+const ConfidenceBar = memo(function ConfidenceBar({ percent }: { percent: number }) {
   const color = percent >= 70 ? 'bg-green-500' : percent >= 50 ? 'bg-yellow-500' : 'bg-red-500';
 
   return (
@@ -104,7 +138,7 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
       />
     </div>
   );
-}
+});
 
 function ImpactIcon({ impact }: { impact: FactorImpact }) {
   if (impact === 'positive') {
@@ -139,6 +173,17 @@ function StockDetailModal({
   reasoning,
   isJapan = false,
 }: StockDetailModalProps) {
+  // Escキーでモーダルを閉じる
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const currencySymbol = isJapan ? '¥' : '$';
@@ -171,12 +216,18 @@ function StockDetailModal({
   const priceRange = maxPrice - minPrice || 1;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="stock-detail-title"
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
       <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold">{symbol}</h2>
+            <h2 id="stock-detail-title" className="text-2xl font-bold">{symbol}</h2>
             {price && (
               <p className="text-lg text-gray-600">
                 {currencySymbol}{isJapan ? Math.round(price).toLocaleString() : price.toFixed(2)}
@@ -185,6 +236,7 @@ function StockDetailModal({
           </div>
           <button
             onClick={onClose}
+            aria-label="モーダルを閉じる"
             className="text-gray-400 hover:text-gray-600 text-2xl"
           >
             ×
@@ -565,7 +617,8 @@ interface JudgmentCardProps {
   isJapan?: boolean;
 }
 
-function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedScore, scoreThreshold, ruleBasedRank, maxPicks, isJapan = false }: JudgmentCardProps) {
+// Memoized JudgmentCard component
+const JudgmentCard = memo(function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedScore, scoreThreshold, ruleBasedRank, maxPicks, isJapan = false }: JudgmentCardProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [showModal, setShowModal] = useState(false);
 
@@ -609,7 +662,7 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
               ? 'bg-blue-100 text-blue-700'
               : 'bg-orange-100 text-orange-700'
           }`}>
-            {isV1 ? 'V1' : 'V2'}
+            {isV1 ? '安定型（V1）' : '成長型（V2）'}
           </span>
           {isFinalPick && (
             <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">
@@ -637,10 +690,10 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
       {/* Confidence Bar */}
       <div className="mb-3">
         <div className="flex justify-between text-xs text-gray-500 mb-1">
-          <span>信頼度</span>
+          <Tooltip term="confidence">確信度</Tooltip>
           <span>{(judgment.confidence * 100).toFixed(0)}%</span>
         </div>
-        <ConfidenceBar confidence={judgment.confidence} />
+        <ConfidenceBar percent={judgment.confidence * 100} />
       </div>
 
       {/* Scores - Both Rule-based and LLM */}
@@ -648,7 +701,7 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
         <div className="grid grid-cols-2 gap-2 text-sm">
           {/* Rule-based Score */}
           <div className="text-center">
-            <div className="text-xs text-gray-500 mb-1">ルールスコア</div>
+            <div className="text-xs text-gray-500 mb-1"><Tooltip term="composite_score">総合スコア</Tooltip></div>
             <div className="flex items-center justify-center gap-1">
               <span className={`font-bold ${
                 ruleScore >= scoreThresh ? 'text-green-600' : 'text-orange-500'
@@ -736,10 +789,13 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
     />
     </>
   );
-}
+});
 
 export function JudgmentPanel({
   judgments,
+  isLoading = false,
+  error = null,
+  onRetry,
   title = 'LLM判断 (Layer 2)',
   finalPicks,
   confidenceThreshold = { conservative: 0.6, aggressive: 0.5 },
@@ -753,6 +809,42 @@ export function JudgmentPanel({
   // Default max picks (NORMAL regime) - V2: 3→5
   const maxPicks = { conservative: 5, aggressive: 5 };
 
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="card">
+        <h3 className="text-lg font-semibold mb-4">{title}</h3>
+        <div className="animate-pulse space-y-4">
+          <div className="h-24 bg-gray-200 rounded"></div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="h-20 bg-gray-200 rounded"></div>
+            <div className="h-20 bg-gray-200 rounded"></div>
+            <div className="h-20 bg-gray-200 rounded"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="card border-red-200 bg-red-50">
+        <h3 className="text-lg font-semibold mb-2 text-red-700">{title}</h3>
+        <p className="text-red-600 text-sm mb-4">{error.message}</p>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+          >
+            再試行
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // Empty state
   if (!judgments || judgments.length === 0) {
     return (
       <div className="card">
@@ -764,30 +856,30 @@ export function JudgmentPanel({
     );
   }
 
-  // Helper to check if a judgment is a final pick
-  const isFinalPick = (j: JudgmentRecord) => {
+  // Memoized helper to check if a judgment is a final pick
+  const checkIsFinalPick = useCallback((j: JudgmentRecord) => {
     if (!finalPicks) return false;
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     const picks = isV1 ? finalPicks.conservative : finalPicks.aggressive;
     return picks.includes(j.symbol);
-  };
+  }, [finalPicks]);
 
-  // Helper to get confidence threshold for a judgment
-  const getConfThreshold = (j: JudgmentRecord) => {
+  // Memoized helper to get confidence threshold for a judgment
+  const getConfThreshold = useCallback((j: JudgmentRecord) => {
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     return isV1 ? confidenceThreshold.conservative : confidenceThreshold.aggressive;
-  };
+  }, [confidenceThreshold]);
 
-  // Helper to get rule-based score for a judgment
-  const getRuleBasedScore = (j: JudgmentRecord): RuleBasedScore | undefined => {
+  // Memoized helper to get rule-based score for a judgment
+  const getRuleBasedScore = useCallback((j: JudgmentRecord): RuleBasedScore | undefined => {
     if (!ruleBasedScores) return undefined;
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     const scores = isV1 ? ruleBasedScores.conservative : ruleBasedScores.aggressive;
     return scores.find(s => s.symbol === j.symbol);
-  };
+  }, [ruleBasedScores]);
 
-  // Helper to get rule-based rank for a judgment
-  const getRuleBasedRank = (j: JudgmentRecord): number | undefined => {
+  // Memoized helper to get rule-based rank for a judgment
+  const getRuleBasedRank = useCallback((j: JudgmentRecord): number | undefined => {
     if (!ruleBasedScores) return undefined;
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     const scores = isV1 ? ruleBasedScores.conservative : ruleBasedScores.aggressive;
@@ -795,38 +887,58 @@ export function JudgmentPanel({
     const sorted = [...scores].sort((a, b) => b.composite_score - a.composite_score);
     const idx = sorted.findIndex(s => s.symbol === j.symbol);
     return idx >= 0 ? idx + 1 : undefined;
-  };
+  }, [ruleBasedScores]);
 
-  // Helper to get score threshold for a judgment
-  const getScoreThreshold = (j: JudgmentRecord) => {
+  // Memoized helper to get score threshold for a judgment
+  const getScoreThreshold = useCallback((j: JudgmentRecord) => {
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     return isV1 ? scoreThreshold.conservative : scoreThreshold.aggressive;
-  };
+  }, [scoreThreshold]);
 
-  // Helper to get max picks for a judgment
-  const getMaxPicks = (j: JudgmentRecord) => {
+  // Memoized helper to get max picks for a judgment
+  const getMaxPicks = useCallback((j: JudgmentRecord) => {
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     return isV1 ? maxPicks.conservative : maxPicks.aggressive;
-  };
+  }, [maxPicks]);
 
-  // Filter and sort
-  const filteredJudgments = judgments
-    .filter(j => filter === 'all' || j.decision === filter)
-    .sort((a, b) => {
-      if (sortBy === 'confidence') return b.confidence - a.confidence;
-      return b.score - a.score;
-    });
+  // Memoized filter change handler
+  const handleFilterChange = useCallback((newFilter: 'all' | 'buy' | 'hold' | 'avoid') => {
+    setFilter(newFilter);
+  }, []);
 
-  // Stats
-  const finalPickCount = judgments.filter(j => isFinalPick(j)).length;
-  const stats = {
-    total: judgments.length,
-    buy: judgments.filter(j => j.decision === 'buy').length,
-    hold: judgments.filter(j => j.decision === 'hold').length,
-    avoid: judgments.filter(j => j.decision === 'avoid').length,
-    avgConfidence: judgments.reduce((sum, j) => sum + j.confidence, 0) / judgments.length,
-    finalPicks: finalPickCount,
-  };
+  // Memoized sort change handler
+  const handleSortChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSortBy(e.target.value as 'confidence' | 'score');
+  }, []);
+
+  // Memoized filtered and sorted judgments
+  const filteredJudgments = useMemo(() =>
+    judgments
+      .filter(j => filter === 'all' || j.decision === filter)
+      .sort((a, b) => {
+        if (sortBy === 'confidence') return b.confidence - a.confidence;
+        return b.score - a.score;
+      }),
+    [judgments, filter, sortBy]
+  );
+
+  // Memoized pipeline stats
+  const pipelineStats = useMemo(() => {
+    const finalPickCount = judgments.filter(j => checkIsFinalPick(j)).length;
+    return {
+      total: judgments.length,
+      buy: judgments.filter(j => j.decision === 'buy').length,
+      hold: judgments.filter(j => j.decision === 'hold').length,
+      avoid: judgments.filter(j => j.decision === 'avoid').length,
+      avgConfidence: judgments.length > 0
+        ? judgments.reduce((sum, j) => sum + j.confidence, 0) / judgments.length
+        : 0,
+      confidenceOk: judgments.filter(j =>
+        j.decision === 'buy' && j.confidence >= getConfThreshold(j)
+      ).length,
+      finalPicks: finalPickCount,
+    };
+  }, [judgments, checkIsFinalPick, getConfThreshold]);
 
   return (
     <div className="space-y-4">
@@ -839,28 +951,24 @@ export function JudgmentPanel({
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-1 flex-wrap">
               <div className="text-center px-2 py-1 bg-white rounded shadow-sm">
-                <p className="text-lg font-bold text-gray-700">{stats.total}</p>
+                <p className="text-lg font-bold text-gray-700">{pipelineStats.total}</p>
                 <p className="text-xs text-gray-500">閾値通過</p>
               </div>
-              <span className="text-gray-400">→</span>
+              <span className="text-gray-400" aria-hidden="true">→</span>
               <div className="text-center px-2 py-1 bg-white rounded shadow-sm">
-                <p className="text-lg font-bold text-green-600">{stats.buy}</p>
+                <p className="text-lg font-bold text-green-600">{pipelineStats.buy}</p>
                 <p className="text-xs text-gray-500">LLM BUY</p>
               </div>
-              <span className="text-gray-400">→</span>
+              <span className="text-gray-400" aria-hidden="true">→</span>
               <div className="text-center px-2 py-1 bg-white rounded shadow-sm">
                 <p className="text-lg font-bold text-purple-600">
-                  {judgments.filter(j => j.decision === 'buy' && j.confidence >= (
-                    (j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative')
-                      ? confidenceThreshold.conservative
-                      : confidenceThreshold.aggressive
-                  )).length}
+                  {pipelineStats.confidenceOk}
                 </p>
                 <p className="text-xs text-gray-500">信頼度OK</p>
               </div>
-              <span className="text-gray-400">→</span>
+              <span className="text-gray-400" aria-hidden="true">→</span>
               <div className="text-center px-2 py-1 bg-blue-50 rounded shadow-sm border border-blue-200">
-                <p className="text-lg font-bold text-blue-600">{stats.finalPicks}</p>
+                <p className="text-lg font-bold text-blue-600">{pipelineStats.finalPicks}</p>
                 <p className="text-xs text-blue-600">最終採用</p>
               </div>
             </div>
@@ -875,24 +983,24 @@ export function JudgmentPanel({
         {/* Stats Summary */}
         <div className="grid grid-cols-5 gap-4 mb-6">
           <div className="text-center">
-            <p className="text-2xl font-bold text-gray-800">{stats.total}</p>
+            <p className="text-2xl font-bold text-gray-800">{pipelineStats.total}</p>
             <p className="text-xs text-gray-500">総判断</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl font-bold text-green-600">{stats.buy}</p>
+            <p className="text-2xl font-bold text-green-600">{pipelineStats.buy}</p>
             <p className="text-xs text-gray-500">BUY</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl font-bold text-yellow-600">{stats.hold}</p>
+            <p className="text-2xl font-bold text-yellow-600">{pipelineStats.hold}</p>
             <p className="text-xs text-gray-500">HOLD</p>
           </div>
           <div className="text-center">
-            <p className="text-2xl font-bold text-red-600">{stats.avoid}</p>
+            <p className="text-2xl font-bold text-red-600">{pipelineStats.avoid}</p>
             <p className="text-xs text-gray-500">AVOID</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-blue-600">
-              {(stats.avgConfidence * 100).toFixed(0)}%
+              {(pipelineStats.avgConfidence * 100).toFixed(0)}%
             </p>
             <p className="text-xs text-gray-500">平均信頼度</p>
           </div>
@@ -904,7 +1012,7 @@ export function JudgmentPanel({
             {(['all', 'buy', 'hold', 'avoid'] as const).map((f) => (
               <button
                 key={f}
-                onClick={() => setFilter(f)}
+                onClick={() => handleFilterChange(f)}
                 className={`px-3 py-1 text-sm rounded-full transition-colors ${
                   filter === f
                     ? 'bg-gray-800 text-white'
@@ -919,7 +1027,7 @@ export function JudgmentPanel({
             <span>並び順:</span>
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as 'confidence' | 'score')}
+              onChange={handleSortChange}
               className="border rounded px-2 py-1"
             >
               <option value="confidence">信頼度</option>
@@ -935,7 +1043,7 @@ export function JudgmentPanel({
           <JudgmentCard
             key={judgment.id}
             judgment={judgment}
-            isFinalPick={isFinalPick(judgment)}
+            isFinalPick={checkIsFinalPick(judgment)}
             confidenceThreshold={getConfThreshold(judgment)}
             ruleBasedScore={getRuleBasedScore(judgment)}
             scoreThreshold={getScoreThreshold(judgment)}
@@ -950,3 +1058,4 @@ export function JudgmentPanel({
 }
 
 export default JudgmentPanel;
+

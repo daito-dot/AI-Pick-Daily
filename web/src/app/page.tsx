@@ -24,29 +24,29 @@ function StrategySection({ strategyMode, picks, scores, isJapan = false }: Strat
 
   const config = {
     conservative: {
-      title: 'V1: Conservative',
-      subtitle: 'バランス型（低リスク）',
+      title: '安定型（V1）',
+      subtitle: 'トレンド・モメンタム・割安度をバランスよく評価',
       bgColor: 'bg-blue-50',
       borderColor: 'border-blue-200',
       textColor: 'text-blue-800',
     },
     aggressive: {
-      title: 'V2: Aggressive',
-      subtitle: 'モメンタム重視（高リターン）',
+      title: '成長型（V2）',
+      subtitle: 'モメンタムとブレイクアウトを重視',
       bgColor: 'bg-orange-50',
       borderColor: 'border-orange-200',
       textColor: 'text-orange-800',
     },
     jp_conservative: {
-      title: 'V1: Conservative',
-      subtitle: 'バランス型（低リスク）',
+      title: '安定型（V1）',
+      subtitle: 'トレンド・モメンタム・割安度をバランスよく評価',
       bgColor: 'bg-blue-50',
       borderColor: 'border-blue-200',
       textColor: 'text-blue-800',
     },
     jp_aggressive: {
-      title: 'V2: Aggressive',
-      subtitle: 'モメンタム重視（高リターン）',
+      title: '成長型（V2）',
+      subtitle: 'モメンタムとブレイクアウトを重視',
       bgColor: 'bg-orange-50',
       borderColor: 'border-orange-200',
       textColor: 'text-orange-800',
@@ -219,18 +219,30 @@ function MarketContent({
 
       {/* Strategy Comparison Note */}
       <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
-        <h4 className="font-semibold mb-2">戦略の違い</h4>
+        <h4 className="font-semibold mb-3">戦略の違い</h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <span className="font-medium text-blue-700">V1 Conservative:</span>
-            <p>4ファクター均衡型。Trend/Momentum/Value/Sentimentを35/35/20/10の配分で評価。安定志向。</p>
+          <div className="border-l-4 border-blue-500 pl-4">
+            <h4 className="font-bold text-blue-700">安定型（V1）</h4>
+            <p className="text-sm text-gray-600 mt-1">
+              トレンド・モメンタム・割安度をバランスよく評価。
+              大きな損失を避けたい方向け。
+            </p>
+            <p className="text-xs text-gray-400 mt-2">
+              配分: トレンド35% / モメンタム35% / バリュー20% / センチメント10%
+            </p>
           </div>
-          <div>
-            <span className="font-medium text-orange-700">V2 Aggressive:</span>
-            <p>モメンタム重視型。12-1モメンタム/ブレイクアウト/カタリストを40/25/20/15で評価。高リターン志向。</p>
+          <div className="border-l-4 border-orange-500 pl-4">
+            <h4 className="font-bold text-orange-700">成長型（V2）</h4>
+            <p className="text-sm text-gray-600 mt-1">
+              モメンタムとブレイクアウトを重視。
+              高いリターンを狙いたい方向け。
+            </p>
+            <p className="text-xs text-gray-400 mt-2">
+              配分: モメンタム40% / ブレイクアウト25% / カタリスト20% / リスク調整15%
+            </p>
           </div>
         </div>
-        <p className="mt-2 text-xs text-gray-400">
+        <p className="mt-3 text-xs text-gray-400">
           {benchmarkDesc}
         </p>
       </div>
