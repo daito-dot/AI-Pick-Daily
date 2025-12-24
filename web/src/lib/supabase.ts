@@ -219,16 +219,18 @@ export async function getScoresForDate(date: string): Promise<StockScore[]> {
 /**
  * Fetch performance history from stock_scores where was_picked = true
  */
-export async function getPerformanceHistory(days: number = 30): Promise<PerformanceLog[]> {
+export async function getPerformanceHistory(days: number = 30, marketType: MarketType = 'us'): Promise<PerformanceLog[]> {
   try {
     const supabase = getSupabase();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
+    const modes = STRATEGY_MODES[marketType];
 
     const { data, error } = await supabase
       .from('stock_scores')
       .select('*')
       .eq('was_picked', true)
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
       .gte('batch_date', startDate.toISOString().split('T')[0])
       .order('batch_date', { ascending: false });
 
@@ -315,15 +317,17 @@ export async function getMarketRegimeHistory(days: number = 30): Promise<MarketR
 /**
  * Fetch missed opportunities (stocks not picked but performed well)
  */
-export async function getMissedOpportunities(days: number = 30, minReturn: number = 3.0): Promise<StockScore[]> {
+export async function getMissedOpportunities(days: number = 30, minReturn: number = 3.0, marketType: MarketType = 'us'): Promise<StockScore[]> {
   try {
     const supabase = getSupabase();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
+    const modes = STRATEGY_MODES[marketType];
 
     const { data } = await supabase
       .from('stock_scores')
       .select('*')
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
       .gte('batch_date', startDate.toISOString().split('T')[0])
       .eq('was_picked', false)
       .gte('return_5d', minReturn)
@@ -340,7 +344,7 @@ export async function getMissedOpportunities(days: number = 30, minReturn: numbe
 /**
  * Get performance comparison stats (picked vs not picked)
  */
-export async function getPerformanceComparison(days: number = 30): Promise<{
+export async function getPerformanceComparison(days: number = 30, marketType: MarketType = 'us'): Promise<{
   pickedCount: number;
   pickedAvgReturn: number;
   notPickedCount: number;
@@ -351,10 +355,12 @@ export async function getPerformanceComparison(days: number = 30): Promise<{
     const supabase = getSupabase();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
+    const modes = STRATEGY_MODES[marketType];
 
     const { data } = await supabase
       .from('stock_scores')
       .select('was_picked, return_5d')
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
       .gte('batch_date', startDate.toISOString().split('T')[0])
       .not('return_5d', 'is', null);
 

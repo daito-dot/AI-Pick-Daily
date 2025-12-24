@@ -7,6 +7,7 @@ import {
   getThresholdHistory,
 } from '@/lib/supabase';
 import { MarketTabs } from '@/components/MarketTabs';
+import { getStockDisplayName } from '@/lib/jp-stocks';
 import { format, parseISO } from 'date-fns';
 import { ja } from 'date-fns/locale';
 
@@ -308,7 +309,7 @@ function PortfolioContent({
                     <td className="py-3">
                       <StrategyBadge strategy={pos.strategy_mode} />
                     </td>
-                    <td className="py-3 font-medium">{pos.symbol}</td>
+                    <td className="py-3 font-medium">{getStockDisplayName(pos.symbol)}</td>
                     <td className="py-3 text-sm text-gray-600">
                       {format(parseISO(pos.entry_date), 'MM/dd', { locale: ja })}
                     </td>
@@ -351,7 +352,7 @@ function PortfolioContent({
                     <td className="py-3">
                       <StrategyBadge strategy={trade.strategy_mode} />
                     </td>
-                    <td className="py-3 font-medium">{trade.symbol}</td>
+                    <td className="py-3 font-medium">{getStockDisplayName(trade.symbol)}</td>
                     <td className="py-3 text-sm text-gray-600">
                       {format(parseISO(trade.entry_date), 'MM/dd', { locale: ja })}
                       <span className="text-gray-400 ml-1">{formatPrice(trade.entry_price, isJapan)}</span>

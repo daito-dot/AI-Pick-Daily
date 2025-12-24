@@ -1,6 +1,10 @@
 import { getPerformanceHistory, getAILessons, getMissedOpportunities, getPerformanceComparison } from '@/lib/supabase';
+import type { MarketType } from '@/lib/supabase';
+import { MarketTabs } from '@/components/MarketTabs';
+import { getStockDisplayName } from '@/lib/jp-stocks';
 import { format, parseISO } from 'date-fns';
 import { ja } from 'date-fns/locale';
+import type { PerformanceLog, StockScore, AILesson } from '@/types';
 
 export const revalidate = 300;
 
@@ -20,14 +24,31 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default async function PerformancePage() {
-  const [performance, lessons, missedOpportunities, comparison] = await Promise.all([
-    getPerformanceHistory(30),
-    getAILessons(5),
-    getMissedOpportunities(30, 3.0),
-    getPerformanceComparison(30),
-  ]);
+function isV1Strategy(strategy: string): boolean {
+  return strategy === 'conservative' || strategy === 'jp_conservative';
+}
 
+interface PerformanceContentProps {
+  performance: PerformanceLog[];
+  missedOpportunities: StockScore[];
+  comparison: {
+    pickedCount: number;
+    pickedAvgReturn: number;
+    notPickedCount: number;
+    notPickedAvgReturn: number;
+    missedOpportunities: number;
+  };
+  lessons: AILesson[];
+  isJapan: boolean;
+}
+
+function PerformanceContent({
+  performance,
+  missedOpportunities,
+  comparison,
+  lessons,
+  isJapan,
+}: PerformanceContentProps) {
   // Calculate stats
   const completedTrades = performance.filter(p => p.status_5d !== 'pending');
   const wins = completedTrades.filter(p => p.status_5d === 'win').length;
@@ -40,11 +61,6 @@ export default async function PerformancePage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-3xl font-bold text-gray-900">パフォーマンス</h2>
-        <p className="text-gray-500 mt-1">推奨銘柄の実績と学習内容</p>
-      </div>
-
       {/* Stats Summary */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="card text-center">
@@ -127,19 +143,19 @@ export default async function PerformancePage() {
               </thead>
               <tbody>
                 {missedOpportunities.slice(0, 10).map((m) => {
-                  const threshold = m.strategy_mode === 'conservative' ? 60 : 75;
+                  const threshold = isV1Strategy(m.strategy_mode) ? 60 : 75;
                   const gap = m.composite_score - threshold;
                   return (
                     <tr key={m.id} className="border-b last:border-0 bg-red-50">
                       <td className="py-3 text-sm text-gray-600">
                         {format(parseISO(m.batch_date), 'MM/dd', { locale: ja })}
                       </td>
-                      <td className="py-3 font-medium">{m.symbol}</td>
+                      <td className="py-3 font-medium">{getStockDisplayName(m.symbol)}</td>
                       <td className="py-3 text-sm">
                         <span className={`px-2 py-1 rounded text-xs ${
-                          m.strategy_mode === 'conservative' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'
+                          isV1Strategy(m.strategy_mode) ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'
                         }`}>
-                          {m.strategy_mode === 'conservative' ? 'V1' : 'V2'}
+                          {isV1Strategy(m.strategy_mode) ? 'V1' : 'V2'}
                         </span>
                       </td>
                       <td className="py-3 text-right">{m.composite_score}</td>
@@ -187,7 +203,7 @@ export default async function PerformancePage() {
                   <td className="py-3 text-sm text-gray-600">
                     {format(parseISO(p.pick_date), 'MM/dd', { locale: ja })}
                   </td>
-                  <td className="py-3 font-medium">{p.symbol}</td>
+                  <td className="py-3 font-medium">{getStockDisplayName(p.symbol)}</td>
                   <td className="py-3 text-right">{p.recommendation_score}</td>
                   <td className={`py-3 text-right ${
                     (p.return_pct_1d || 0) >= 0 ? 'text-green-600' : 'text-red-600'
@@ -251,6 +267,61 @@ export default async function PerformancePage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+export default async function PerformancePage() {
+  // Fetch data for both US and Japan markets in parallel
+  const [
+    usPerformance,
+    jpPerformance,
+    usMissedOpportunities,
+    jpMissedOpportunities,
+    usComparison,
+    jpComparison,
+    lessons,
+  ] = await Promise.all([
+    getPerformanceHistory(30, 'us'),
+    getPerformanceHistory(30, 'jp'),
+    getMissedOpportunities(30, 3.0, 'us'),
+    getMissedOpportunities(30, 3.0, 'jp'),
+    getPerformanceComparison(30, 'us'),
+    getPerformanceComparison(30, 'jp'),
+    getAILessons(5),
+  ]);
+
+  // US Content
+  const usContent = (
+    <PerformanceContent
+      performance={usPerformance}
+      missedOpportunities={usMissedOpportunities}
+      comparison={usComparison}
+      lessons={lessons}
+      isJapan={false}
+    />
+  );
+
+  // JP Content
+  const jpContent = (
+    <PerformanceContent
+      performance={jpPerformance}
+      missedOpportunities={jpMissedOpportunities}
+      comparison={jpComparison}
+      lessons={lessons}
+      isJapan={true}
+    />
+  );
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-3xl font-bold text-gray-900">パフォーマンス</h2>
+        <p className="text-gray-500 mt-1">推奨銘柄の実績と学習内容</p>
+      </div>
+
+      {/* Market Tabs */}
+      <MarketTabs usContent={usContent} jpContent={jpContent} />
     </div>
   );
 }
