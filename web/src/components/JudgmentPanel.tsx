@@ -3,6 +3,33 @@
 import { useState } from 'react';
 import type { JudgmentRecord, KeyFactor, FactorImpact } from '@/types';
 
+// Helper to safely parse JSON fields that might be stored as strings
+function safeParseJson<T>(value: T | string | null | undefined, fallback: T): T {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+// Helper to parse key_factors
+function parseKeyFactors(value: KeyFactor[] | string | null | undefined): KeyFactor[] {
+  return safeParseJson(value, []);
+}
+
+// Helper to parse identified_risks
+function parseRisks(value: string[] | string | null | undefined): string[] {
+  return safeParseJson(value, []);
+}
+
+// Helper to parse reasoning
+function parseReasoning(value: JudgmentRecord['reasoning'] | string | null | undefined): JudgmentRecord['reasoning'] | null {
+  if (!value) return null;
+  return safeParseJson(value, null);
+}
+
 interface JudgmentPanelProps {
   judgments: JudgmentRecord[];
   title?: string;
@@ -170,6 +197,11 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
 function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
   const [showDetails, setShowDetails] = useState(false);
 
+  // Parse JSON fields that might be stored as strings (legacy data)
+  const keyFactors = parseKeyFactors(judgment.key_factors);
+  const identifiedRisks = parseRisks(judgment.identified_risks);
+  const reasoning = parseReasoning(judgment.reasoning);
+
   return (
     <div className="bg-white rounded-lg border p-4 shadow-sm hover:shadow-md transition-shadow">
       {/* Header */}
@@ -213,7 +245,7 @@ function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
         className="w-full text-left text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1"
       >
         <span>{showDetails ? '▼' : '▶'}</span>
-        <span>詳細分析 ({judgment.key_factors?.length || 0}ファクター)</span>
+        <span>詳細分析 ({keyFactors.length}ファクター)</span>
       </button>
 
       {showDetails && (
@@ -221,27 +253,23 @@ function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
           {/* Key Factors */}
           <div>
             <p className="text-sm font-medium text-gray-700 mb-2">重要ファクター:</p>
-            <KeyFactorsList factors={judgment.key_factors} />
+            <KeyFactorsList factors={keyFactors} />
           </div>
 
           {/* Identified Risks */}
-          {judgment.identified_risks && (
+          {identifiedRisks.length > 0 && (
             <div>
               <p className="text-sm font-medium text-red-700 mb-2">識別されたリスク:</p>
-              {Array.isArray(judgment.identified_risks) ? (
-                <ul className="list-disc list-inside text-sm text-red-600 ml-2">
-                  {judgment.identified_risks.map((risk, idx) => (
-                    <li key={idx}>{risk}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-red-600 ml-2">{judgment.identified_risks}</p>
-              )}
+              <ul className="list-disc list-inside text-sm text-red-600 ml-2">
+                {identifiedRisks.map((risk, idx) => (
+                  <li key={idx}>{risk}</li>
+                ))}
+              </ul>
             </div>
           )}
 
           {/* Reasoning */}
-          <ReasoningSection reasoning={judgment.reasoning} />
+          <ReasoningSection reasoning={reasoning} />
 
           {/* Model Info */}
           <div className="pt-2 border-t border-gray-100 text-xs text-gray-400">
