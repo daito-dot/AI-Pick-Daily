@@ -1,0 +1,55 @@
+name: Reset Portfolio Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: 'Which market to reset'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - us
+          - jp
+          - all
+      confirm:
+        description: 'Type "RESET" to confirm'
+        required: true
+        type: string
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate confirmation
+        if: ${{ github.event.inputs.confirm != 'RESET' }}
+        run: |
+          echo "ERROR: You must type 'RESET' to confirm the operation."
+          echo "You entered: '${{ github.event.inputs.confirm }}'"
+          exit 1
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Reset portfolio
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          echo "Resetting portfolio for market: ${{ github.event.inputs.market }}"
+          echo ""
+          # Auto-confirm since we validated above
+          echo "yes" | python scripts/reset_portfolio.py --market ${{ github.event.inputs.market }}
