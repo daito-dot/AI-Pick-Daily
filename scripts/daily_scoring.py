@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import config
 from src.data.finnhub_client import FinnhubClient
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
+from src.data.symbol_loader import SymbolLoader, DEFAULT_US_SYMBOLS
 from src.data.supabase_client import (
     SupabaseClient,
     DailyPick,
@@ -51,6 +52,7 @@ from src.judgment import (
 from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
 from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
+from src.logging_config import setup_logging, set_batch_id, get_logger, create_symbol_logger
 
 
 # Checkpoint configuration
@@ -218,29 +220,14 @@ class DataFetchError(Exception):
     """Raised when data cannot be fetched from any source."""
     pass
 
-# Setup logging
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
 
-logging.basicConfig(
-    level=logging.DEBUG if config.debug else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(log_dir / f"scoring_{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
+# Logger will be initialized in main() with batch_id
+logger = get_logger(__name__)
 
 
-# S&P 500 top holdings (simplified for MVP)
-SP500_TOP_SYMBOLS = [
-    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "BRK.B", "UNH", "JNJ",
-    "V", "XOM", "JPM", "PG", "MA", "HD", "CVX", "MRK", "ABBV", "LLY",
-    "PEP", "KO", "COST", "AVGO", "MCD", "WMT", "CSCO", "TMO", "ABT", "CRM",
-    "DHR", "ACN", "NKE", "LIN", "ADBE", "ORCL", "TXN", "NEE", "PM", "VZ",
-    "CMCSA", "RTX", "HON", "INTC", "UPS", "LOW", "MS", "QCOM", "SPGI", "BA",
-]
+# Legacy hardcoded symbols - now loaded via SymbolLoader
+# Kept as fallback reference (DEFAULT_US_SYMBOLS is imported from symbol_loader)
+SP500_TOP_SYMBOLS = DEFAULT_US_SYMBOLS
 
 
 def fetch_market_regime_data(finnhub: FinnhubClient, yf_client: YFinanceClient) -> dict:
@@ -539,7 +526,83 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Resume from last checkpoint if available",
     )
+    parser.add_argument(
+        "--async",
+        dest="use_async",
+        action="store_true",
+        help="Use async mode for parallel data fetching (10 concurrent, ~50%% faster)",
+    )
+    parser.add_argument(
+        "--async-concurrency",
+        type=int,
+        default=10,
+        help="Number of concurrent requests in async mode (default: 10)",
+    )
+    parser.add_argument(
+        "--symbols-source",
+        type=str,
+        choices=["yaml", "db", "default", "auto"],
+        default="auto",
+        help="Source for stock symbols: yaml (config/symbols.yaml), db (Supabase), default (hardcoded), auto (fallback chain)",
+    )
+    parser.add_argument(
+        "--market",
+        type=str,
+        choices=["us", "jp", "all"],
+        default="us",
+        help="Market to process: us (US stocks), jp (Japan stocks), all (both markets)",
+    )
     return parser.parse_args()
+
+
+def fetch_stocks_async_mode(
+    candidates: list[str],
+    vix_level: float,
+    concurrency: int = 10,
+) -> tuple[list[StockData], list[V2StockData], list[str]]:
+    """
+    Fetch stock data using async mode for faster processing.
+
+    Args:
+        candidates: List of stock symbols to fetch
+        vix_level: Current VIX level
+        concurrency: Number of concurrent requests
+
+    Returns:
+        Tuple of (v1_stocks_data, v2_stocks_data, failed_symbols)
+    """
+    from src.data.async_fetcher import (
+        AsyncFetcherConfig,
+        fetch_stocks_sync_wrapper,
+    )
+
+    fetch_config = AsyncFetcherConfig(max_concurrent=concurrency)
+
+    def progress_callback(symbol: str, current: int, total: int):
+        if current % 10 == 0 or current == total:
+            logger.info(f"Async fetch progress: {current}/{total} ({symbol})")
+
+    logger.info(f"Starting async fetch with {concurrency} concurrent connections...")
+
+    result = fetch_stocks_sync_wrapper(
+        symbols=candidates,
+        vix_level=vix_level,
+        fetch_config=fetch_config,
+        progress_callback=progress_callback,
+    )
+
+    v1_stocks_data = [v1 for v1, v2 in result.successful]
+    v2_stocks_data = [v2 for v1, v2 in result.successful]
+    failed_symbols = [sym for sym, err in result.failed]
+
+    logger.info(
+        f"Async fetch completed: {len(result.successful)} successful, "
+        f"{len(result.failed)} failed, "
+        f"{result.total_duration_ms:.0f}ms total, "
+        f"{result.parallel_speedup:.1f}x speedup"
+    )
+
+    return v1_stocks_data, v2_stocks_data, failed_symbols
 
 
 def main():
@@ -550,17 +613,25 @@ def main():
     batch_start_time = datetime.now(timezone.utc)
     batch_id = batch_start_time.strftime("%Y%m%d_%H%M%S")
 
+    # Initialize structured logging with batch_id for correlation
+    setup_logging(batch_id=batch_id)
+
     # Initialize judgment tracking variables
     total_successful_judgments = 0
     total_failed_judgments = 0
 
-    logger.info("=" * 50)
-    logger.info("Starting daily scoring batch")
-    logger.info(f"Timestamp: {batch_start_time.isoformat()}")
-    logger.info(f"Batch ID: {batch_id}")
-    if args.resume:
-        logger.info("Resume mode: enabled")
-    logger.info("=" * 50)
+    logger.info(
+        "Starting daily scoring batch",
+        extra={
+            "event": "batch_start",
+            "timestamp": batch_start_time.isoformat(),
+            "resume_mode": args.resume,
+            "async_mode": args.use_async,
+            "async_concurrency": args.async_concurrency if args.use_async else None,
+            "symbols_source": args.symbols_source,
+            "market": args.market,
+        }
+    )
 
     # Initialize clients
     try:
@@ -568,7 +639,15 @@ def main():
         yf_client = get_yfinance_client()
         supabase = SupabaseClient()
     except Exception as e:
-        logger.error(f"Failed to initialize clients: {e}")
+        logger.error(
+            "Failed to initialize clients",
+            extra={
+                "event": "batch_error",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "step": "client_init",
+            }
+        )
         sys.exit(1)
 
     # Track batch execution
@@ -579,8 +658,15 @@ def main():
     try:
         regime_data = fetch_market_regime_data(finnhub, yf_client)
     except DataFetchError as e:
-        logger.error(f"FATAL: Cannot fetch market regime data: {e}")
-        logger.error("Batch failed - no data sources available")
+        logger.error(
+            "Cannot fetch market regime data - batch failed",
+            extra={
+                "event": "batch_error",
+                "error_type": "DataFetchError",
+                "error_message": str(e),
+                "step": "market_regime",
+            }
+        )
         BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
@@ -592,9 +678,17 @@ def main():
         volatility_30d_avg=regime_data["volatility_30d"],
     )
 
-    logger.info(f"Market Regime: {market_regime.regime.value}")
-    logger.info(f"Max Picks: {market_regime.max_picks}")
-    logger.info(f"Notes: {market_regime.notes}")
+    logger.info(
+        "Market regime determined",
+        extra={
+            "event": "market_regime",
+            "regime": market_regime.regime.value,
+            "max_picks": market_regime.max_picks,
+            "vix_level": market_regime.vix_level,
+            "sp500_deviation_pct": market_regime.sp500_deviation_pct,
+            "notes": market_regime.notes,
+        }
+    )
 
     # Save market regime
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -609,7 +703,10 @@ def main():
 
     # Check if we should skip (crisis mode)
     if market_regime.max_picks == 0:
-        logger.warning("Market in CRISIS mode - no recommendations today")
+        logger.warning(
+            "Market in CRISIS mode - no recommendations today",
+            extra={"event": "crisis_mode", "vix_level": market_regime.vix_level}
+        )
         # Save empty picks for both strategies
         supabase.save_daily_picks(DailyPick(
             batch_date=today,
@@ -632,78 +729,125 @@ def main():
         BatchLogger.finish(batch_ctx)
         return
 
-    # 2. Filter candidates
-    logger.info("Step 2: Filtering candidates...")
-    candidates = SP500_TOP_SYMBOLS.copy()
+    # 2. Load symbols and filter candidates
+    logger.info("Step 2: Loading symbols and filtering candidates...")
+
+    # Initialize SymbolLoader with Supabase client for DB support
+    symbol_loader = SymbolLoader(supabase_client=supabase)
+
+    # Determine market to process
+    market_filter = None if args.market == "all" else args.market
+
+    # Load symbols from specified source
+    try:
+        candidates = symbol_loader.get_symbols(
+            market=market_filter,
+            source=args.symbols_source,
+        )
+        logger.info(
+            f"Loaded {len(candidates)} symbols from {symbol_loader.loaded_from}",
+            extra={
+                "event": "symbols_loaded",
+                "source": symbol_loader.loaded_from,
+                "market": args.market,
+                "count": len(candidates),
+            }
+        )
+    except Exception as e:
+        logger.warning(f"Symbol loading failed ({e}), falling back to defaults")
+        candidates = SP500_TOP_SYMBOLS.copy()
+
+    # Filter out stocks with upcoming earnings
     candidates = filter_earnings(finnhub, candidates)
     logger.info(f"Candidates after filtering: {len(candidates)}")
 
-    # 3. Fetch stock data (with checkpoint support)
+    # 3. Fetch stock data (with checkpoint support or async mode)
     logger.info("Step 3: Fetching stock data...")
-
-    # Initialize checkpoint
-    checkpoint: BatchCheckpoint | None = None
-    if args.resume:
-        checkpoint = load_checkpoint(today)
-        if checkpoint:
-            logger.info(
-                f"Resuming from checkpoint: {len(checkpoint.processed_symbols)} "
-                f"symbols already processed (last updated: {checkpoint.last_updated})"
-            )
-        else:
-            logger.info("No checkpoint found, starting fresh")
-
-    # Create new checkpoint if needed
-    if checkpoint is None:
-        checkpoint = BatchCheckpoint(batch_date=today)
 
     v1_stocks_data = []
     v2_stocks_data = []
     failed_symbols = []
-    restored_count = 0
 
-    # First, restore data from checkpoint for already processed symbols
-    if args.resume and checkpoint.v1_stock_data:
-        for symbol in checkpoint.processed_symbols:
-            if symbol in checkpoint.v1_stock_data and symbol in checkpoint.v2_stock_data:
-                try:
-                    v1_data = dict_to_stock_data(checkpoint.v1_stock_data[symbol])
-                    v2_data = dict_to_v2_stock_data(checkpoint.v2_stock_data[symbol])
-                    v1_stocks_data.append(v1_data)
-                    v2_stocks_data.append(v2_data)
-                    restored_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to restore {symbol} from checkpoint: {e}")
-            elif symbol in checkpoint.failed_symbols:
-                # Symbol was already marked as failed, skip it
+    # Use async mode if requested (faster, no checkpoint support)
+    if args.use_async:
+        logger.info(f"Using ASYNC mode with {args.async_concurrency} concurrent connections")
+        if args.resume:
+            logger.warning("--resume is ignored in async mode (checkpoint not supported)")
+
+        try:
+            v1_stocks_data, v2_stocks_data, failed_symbols = fetch_stocks_async_mode(
+                candidates=candidates,
+                vix_level=regime_data["vix"],
+                concurrency=args.async_concurrency,
+            )
+        except Exception as e:
+            logger.error(f"Async fetch failed: {e}, falling back to sync mode")
+            args.use_async = False  # Fall through to sync mode
+
+    # Use sync mode (with checkpoint support)
+    if not args.use_async:
+        logger.info("Using SYNC mode with checkpoint support")
+
+        # Initialize checkpoint
+        checkpoint: BatchCheckpoint | None = None
+        if args.resume:
+            checkpoint = load_checkpoint(today)
+            if checkpoint:
+                logger.info(
+                    f"Resuming from checkpoint: {len(checkpoint.processed_symbols)} "
+                    f"symbols already processed (last updated: {checkpoint.last_updated})"
+                )
+            else:
+                logger.info("No checkpoint found, starting fresh")
+
+        # Create new checkpoint if needed
+        if checkpoint is None:
+            checkpoint = BatchCheckpoint(batch_date=today)
+
+        restored_count = 0
+
+        # First, restore data from checkpoint for already processed symbols
+        if args.resume and checkpoint.v1_stock_data:
+            for symbol in checkpoint.processed_symbols:
+                if symbol in checkpoint.v1_stock_data and symbol in checkpoint.v2_stock_data:
+                    try:
+                        v1_data = dict_to_stock_data(checkpoint.v1_stock_data[symbol])
+                        v2_data = dict_to_v2_stock_data(checkpoint.v2_stock_data[symbol])
+                        v1_stocks_data.append(v1_data)
+                        v2_stocks_data.append(v2_data)
+                        restored_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to restore {symbol} from checkpoint: {e}")
+                elif symbol in checkpoint.failed_symbols:
+                    # Symbol was already marked as failed, skip it
+                    failed_symbols.append(symbol)
+
+            if restored_count > 0:
+                logger.info(f"Restored {restored_count} symbols from checkpoint")
+
+        for symbol in candidates:
+            # Skip already processed symbols (in resume mode)
+            if symbol in checkpoint.processed_symbols:
+                continue
+
+            result = fetch_stock_data(finnhub, yf_client, symbol, regime_data["vix"])
+            if result:
+                v1_data, v2_data = result
+                v1_stocks_data.append(v1_data)
+                v2_stocks_data.append(v2_data)
+                # Store in checkpoint
+                checkpoint.v1_stock_data[symbol] = stock_data_to_dict(v1_data)
+                checkpoint.v2_stock_data[symbol] = v2_stock_data_to_dict(v2_data)
+            else:
                 failed_symbols.append(symbol)
+                checkpoint.failed_symbols.append(symbol)
 
-        if restored_count > 0:
-            logger.info(f"Restored {restored_count} symbols from checkpoint")
+            # Update checkpoint after each symbol
+            checkpoint.processed_symbols.append(symbol)
+            save_checkpoint(checkpoint)
 
-    for symbol in candidates:
-        # Skip already processed symbols (in resume mode)
-        if symbol in checkpoint.processed_symbols:
-            continue
-
-        result = fetch_stock_data(finnhub, yf_client, symbol, regime_data["vix"])
-        if result:
-            v1_data, v2_data = result
-            v1_stocks_data.append(v1_data)
-            v2_stocks_data.append(v2_data)
-            # Store in checkpoint
-            checkpoint.v1_stock_data[symbol] = stock_data_to_dict(v1_data)
-            checkpoint.v2_stock_data[symbol] = v2_stock_data_to_dict(v2_data)
-        else:
-            failed_symbols.append(symbol)
-            checkpoint.failed_symbols.append(symbol)
-
-        # Update checkpoint after each symbol
-        checkpoint.processed_symbols.append(symbol)
-        save_checkpoint(checkpoint)
-
-        # Small delay to avoid rate limiting
-        time.sleep(0.5)
+            # Small delay to avoid rate limiting
+            time.sleep(0.5)
 
     logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
     if failed_symbols:
@@ -743,10 +887,16 @@ def main():
         v2_threshold=v2_threshold,
     )
 
-    logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
-    logger.info(f"V1 picks (rule-based): {dual_result.v1_picks}")
-    logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
-    logger.info(f"V2 picks (rule-based): {dual_result.v2_picks}")
+    logger.info(
+        "Dual scoring completed",
+        extra={
+            "event": "scoring_complete",
+            "v1_scored_count": len(dual_result.v1_scores),
+            "v1_rule_picks": dual_result.v1_picks,
+            "v2_scored_count": len(dual_result.v2_scores),
+            "v2_rule_picks": dual_result.v2_picks,
+        }
+    )
 
     # 5.5. Run LLM Judgment for top candidates (Layer 2)
     logger.info("Step 5.5: Running LLM judgment for top candidates...")
@@ -1095,14 +1245,25 @@ def main():
     for alert_message in alerts:
         send_alert(alert_message, AlertLevel.WARNING)
 
-    logger.info("=" * 50)
-    logger.info("Daily scoring batch completed successfully")
-    logger.info(f"V1 Conservative Picks (final): {v1_final_picks}")
-    logger.info(f"V2 Aggressive Picks (final): {v2_final_picks}")
-    if use_llm_judgment:
-        logger.info(f"  (Rule-based V1: {dual_result.v1_picks})")
-        logger.info(f"  (Rule-based V2: {dual_result.v2_picks})")
-    logger.info("=" * 50)
+    # Calculate batch duration
+    batch_duration_seconds = (batch_end_time - batch_start_time).total_seconds()
+
+    logger.info(
+        "Daily scoring batch completed successfully",
+        extra={
+            "event": "batch_complete",
+            "duration_seconds": batch_duration_seconds,
+            "v1_final_picks": v1_final_picks,
+            "v2_final_picks": v2_final_picks,
+            "v1_rule_picks": dual_result.v1_picks,
+            "v2_rule_picks": dual_result.v2_picks,
+            "total_symbols": len(candidates),
+            "successful_data_fetches": len(v1_stocks_data),
+            "failed_data_fetches": len(failed_symbols),
+            "llm_judgment_enabled": use_llm_judgment,
+            "market_regime": market_regime.regime.value,
+        }
+    )
 
 
 if __name__ == "__main__":

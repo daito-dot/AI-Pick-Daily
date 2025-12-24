@@ -1,0 +1,190 @@
+# Stock Universe Configuration
+# Version: 1.0
+# Last Updated: 2024-12-24
+
+version: 1
+
+# =============================================================================
+# US Market Stocks
+# =============================================================================
+us_stocks:
+  enabled: true
+  description: "S&P 500 Top Holdings and Selected High-Volume Stocks"
+
+  symbols:
+    # Technology Giants (FAANG+)
+    - AAPL    # Apple Inc.
+    - MSFT    # Microsoft Corporation
+    - AMZN    # Amazon.com Inc.
+    - NVDA    # NVIDIA Corporation
+    - GOOGL   # Alphabet Inc. Class A
+    - META    # Meta Platforms Inc.
+    - TSLA    # Tesla Inc.
+
+    # Financial Sector
+    - BRK.B   # Berkshire Hathaway Class B
+    - JPM     # JPMorgan Chase & Co.
+    - V       # Visa Inc.
+    - MA      # Mastercard Inc.
+    - MS      # Morgan Stanley
+
+    # Healthcare
+    - UNH     # UnitedHealth Group Inc.
+    - JNJ     # Johnson & Johnson
+    - MRK     # Merck & Co. Inc.
+    - ABBV    # AbbVie Inc.
+    - LLY     # Eli Lilly and Company
+    - TMO     # Thermo Fisher Scientific
+    - ABT     # Abbott Laboratories
+    - DHR     # Danaher Corporation
+
+    # Consumer Goods
+    - PG      # Procter & Gamble Co.
+    - KO      # Coca-Cola Company
+    - PEP     # PepsiCo Inc.
+    - COST    # Costco Wholesale Corporation
+    - WMT     # Walmart Inc.
+    - MCD     # McDonald's Corporation
+    - NKE     # Nike Inc.
+    - HD      # Home Depot Inc.
+    - LOW     # Lowe's Companies Inc.
+
+    # Energy
+    - XOM     # Exxon Mobil Corporation
+    - CVX     # Chevron Corporation
+
+    # Technology & Semiconductors
+    - AVGO    # Broadcom Inc.
+    - CRM     # Salesforce Inc.
+    - ACN     # Accenture plc
+    - ADBE    # Adobe Inc.
+    - ORCL    # Oracle Corporation
+    - TXN     # Texas Instruments Inc.
+    - CSCO    # Cisco Systems Inc.
+    - INTC    # Intel Corporation
+    - QCOM    # Qualcomm Inc.
+
+    # Industrial & Utilities
+    - LIN     # Linde plc
+    - NEE     # NextEra Energy Inc.
+    - HON     # Honeywell International Inc.
+    - RTX     # RTX Corporation
+    - BA      # Boeing Company
+    - UPS     # United Parcel Service Inc.
+
+    # Telecommunications & Media
+    - PM      # Philip Morris International
+    - VZ      # Verizon Communications Inc.
+    - CMCSA   # Comcast Corporation
+
+    # Financial Services
+    - SPGI    # S&P Global Inc.
+
+# =============================================================================
+# Japan Market Stocks
+# =============================================================================
+jp_stocks:
+  enabled: true
+  description: "Nikkei 225 Selected High-Volume Stocks"
+
+  symbols:
+    # Automotive
+    - 7203.T  # Toyota Motor Corporation
+    - 7267.T  # Honda Motor Co.
+    - 7269.T  # Suzuki Motor Corporation
+    - 7201.T  # Nissan Motor Co.
+
+    # Electronics & Technology
+    - 6758.T  # Sony Group Corporation
+    - 6861.T  # Keyence Corporation
+    - 6501.T  # Hitachi Ltd.
+    - 6702.T  # Fujitsu Limited
+    - 6503.T  # Mitsubishi Electric Corporation
+    - 6752.T  # Panasonic Holdings Corporation
+    - 6594.T  # Nidec Corporation
+
+    # Semiconductors
+    - 6857.T  # Advantest Corporation
+    - 8035.T  # Tokyo Electron Limited
+    - 6723.T  # Renesas Electronics Corporation
+
+    # Trading Companies (Sogo Shosha)
+    - 8058.T  # Mitsubishi Corporation
+    - 8031.T  # Mitsui & Co. Ltd.
+    - 8001.T  # ITOCHU Corporation
+    - 8002.T  # Marubeni Corporation
+    - 8053.T  # Sumitomo Corporation
+
+    # Banking & Finance
+    - 8306.T  # Mitsubishi UFJ Financial Group
+    - 8316.T  # Sumitomo Mitsui Financial Group
+    - 8411.T  # Mizuho Financial Group
+    - 8766.T  # Tokio Marine Holdings
+
+    # Pharmaceuticals & Healthcare
+    - 4502.T  # Takeda Pharmaceutical Company
+    - 4503.T  # Astellas Pharma Inc.
+    - 4568.T  # Daiichi Sankyo Company
+    - 4519.T  # Chugai Pharmaceutical Co.
+
+    # Consumer & Retail
+    - 9983.T  # Fast Retailing Co. (Uniqlo)
+    - 7974.T  # Nintendo Co.
+    - 9984.T  # SoftBank Group Corp.
+    - 4452.T  # Kao Corporation
+
+    # Industrial
+    - 6301.T  # Komatsu Ltd.
+    - 6367.T  # Daikin Industries
+    - 7751.T  # Canon Inc.
+    - 7733.T  # Olympus Corporation
+
+    # Telecommunications
+    - 9432.T  # Nippon Telegraph and Telephone
+    - 9433.T  # KDDI Corporation
+    - 9434.T  # SoftBank Corp.
+
+    # Real Estate & Construction
+    - 8801.T  # Mitsui Fudosan Co.
+    - 8802.T  # Mitsubishi Estate Co.
+
+# =============================================================================
+# Settings
+# =============================================================================
+settings:
+  # Maximum symbols to process in a single batch
+  max_symbols_per_batch: 100
+
+  # Rate limiting settings
+  rate_limit_delay_ms: 500
+
+  # Exclude patterns (glob-style)
+  exclude_patterns:
+    - "*.X"     # Exclude certain exchange symbols
+    - "*.PK"    # Exclude Pink Sheets
+    - "*.OB"    # Exclude OTC Bulletin Board
+
+  # Symbol validation
+  validation:
+    min_symbol_length: 1
+    max_symbol_length: 10
+    allow_japanese_tickers: true  # Allow .T suffix
+
+# =============================================================================
+# Metadata
+# =============================================================================
+metadata:
+  created_at: "2024-12-24"
+  created_by: "AI-Pick-Daily System"
+  notes: |
+    This file contains the stock universe for the AI-Pick-Daily system.
+
+    Modification Instructions:
+    - Add new symbols under the appropriate market section
+    - Include a comment with the company name for readability
+    - Ensure symbols match the data provider's format
+    - For Japanese stocks, use the .T suffix (Tokyo Stock Exchange)
+
+    Sources:
+    - US: S&P 500 constituent list, focusing on top holdings by market cap
+    - JP: Nikkei 225 constituent list, focusing on high-volume stocks

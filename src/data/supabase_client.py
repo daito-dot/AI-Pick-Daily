@@ -1283,3 +1283,179 @@ class SupabaseClient:
 
         result = query.order("reflection_date", desc=True).limit(limit).execute()
         return result.data or []
+
+    # ============ Stock Universe ============
+
+    def get_stock_universe(
+        self,
+        market_type: str | None = None,
+        enabled_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """
+        Get stock universe from database.
+
+        Args:
+            market_type: Filter by market type ('us' or 'jp')
+            enabled_only: If True, only return enabled symbols
+
+        Returns:
+            List of stock universe records
+        """
+        query = self._client.table("stock_universe").select("*")
+
+        if market_type:
+            query = query.eq("market_type", market_type)
+
+        if enabled_only:
+            query = query.eq("enabled", True)
+
+        result = query.order("symbol").execute()
+        return result.data or []
+
+    def add_symbol_to_universe(
+        self,
+        symbol: str,
+        market_type: str,
+        company_name: str | None = None,
+        sector: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Add a symbol to the stock universe.
+
+        Args:
+            symbol: Stock ticker symbol
+            market_type: 'us' or 'jp'
+            company_name: Optional company name
+            sector: Optional sector classification
+            enabled: Whether the symbol is enabled for trading
+
+        Returns:
+            Inserted/updated record
+        """
+        record: dict[str, Any] = {
+            "symbol": symbol,
+            "market_type": market_type,
+            "enabled": enabled,
+        }
+
+        if company_name:
+            record["company_name"] = company_name
+        if sector:
+            record["sector"] = sector
+
+        result = self._client.table("stock_universe").upsert(
+            record,
+            on_conflict="symbol,market_type",
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def update_symbol_status(
+        self,
+        symbol: str,
+        market_type: str,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        """
+        Enable or disable a symbol in the stock universe.
+
+        Args:
+            symbol: Stock ticker symbol
+            market_type: 'us' or 'jp'
+            enabled: New enabled status
+
+        Returns:
+            Updated record
+        """
+        result = self._client.table("stock_universe").update({
+            "enabled": enabled,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq(
+            "symbol", symbol
+        ).eq(
+            "market_type", market_type
+        ).execute()
+
+        return result.data[0] if result.data else {}
+
+    def remove_symbol_from_universe(
+        self,
+        symbol: str,
+        market_type: str,
+    ) -> bool:
+        """
+        Remove a symbol from the stock universe.
+
+        Args:
+            symbol: Stock ticker symbol
+            market_type: 'us' or 'jp'
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        result = self._client.table("stock_universe").delete().eq(
+            "symbol", symbol
+        ).eq(
+            "market_type", market_type
+        ).execute()
+
+        return len(result.data) > 0 if result.data else False
+
+    def bulk_add_symbols(
+        self,
+        symbols: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Bulk add symbols to the stock universe.
+
+        Args:
+            symbols: List of symbol dicts with keys:
+                - symbol: Stock ticker symbol (required)
+                - market_type: 'us' or 'jp' (required)
+                - company_name: Optional company name
+                - sector: Optional sector
+                - enabled: Optional enabled status (default True)
+
+        Returns:
+            List of inserted/updated records
+        """
+        records = []
+        for s in symbols:
+            record = {
+                "symbol": s["symbol"],
+                "market_type": s["market_type"],
+                "enabled": s.get("enabled", True),
+            }
+            if s.get("company_name"):
+                record["company_name"] = s["company_name"]
+            if s.get("sector"):
+                record["sector"] = s["sector"]
+            records.append(record)
+
+        result = self._client.table("stock_universe").upsert(
+            records,
+            on_conflict="symbol,market_type",
+        ).execute()
+
+        return result.data or []
+
+    def get_symbol_count_by_market(self) -> dict[str, int]:
+        """
+        Get count of enabled symbols by market type.
+
+        Returns:
+            Dict with market_type as key and count as value
+        """
+        result = self._client.table("stock_universe").select(
+            "market_type"
+        ).eq(
+            "enabled", True
+        ).execute()
+
+        counts: dict[str, int] = {}
+        for row in result.data or []:
+            market = row.get("market_type", "unknown")
+            counts[market] = counts.get(market, 0) + 1
+
+        return counts
