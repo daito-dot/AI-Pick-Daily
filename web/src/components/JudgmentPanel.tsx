@@ -46,6 +46,14 @@ function parseReasoning(value: JudgmentRecord['reasoning'] | string | null | und
 interface JudgmentPanelProps {
   judgments: JudgmentRecord[];
   title?: string;
+  finalPicks?: {
+    conservative: string[];
+    aggressive: string[];
+  };
+  confidenceThreshold?: {
+    conservative: number;
+    aggressive: number;
+  };
 }
 
 function DecisionBadge({ decision, confidence }: { decision: string; confidence: number }) {
@@ -221,7 +229,13 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
   );
 }
 
-function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
+interface JudgmentCardProps {
+  judgment: JudgmentRecord;
+  isFinalPick?: boolean;
+  confidenceThreshold?: number;
+}
+
+function JudgmentCard({ judgment, isFinalPick, confidenceThreshold }: JudgmentCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
   // Parse JSON fields that might be stored as strings (legacy data)
@@ -229,21 +243,47 @@ function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
   const identifiedRisks = parseRisks(judgment.identified_risks);
   const reasoning = parseReasoning(judgment.reasoning);
 
+  // Determine filter status
+  const isV1 = judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative';
+  const threshold = confidenceThreshold ?? (isV1 ? 0.6 : 0.5);
+  const passedLLM = judgment.decision === 'buy';
+  const passedConfidence = judgment.confidence >= threshold;
+
+  // Get filter status message
+  const getFilterStatus = () => {
+    if (isFinalPick) return { text: '最終ピック採用', color: 'text-green-600', icon: '✓' };
+    if (!passedLLM) return { text: `LLM: ${judgment.decision.toUpperCase()}`, color: 'text-gray-500', icon: '−' };
+    if (!passedConfidence) return { text: `信頼度不足 (${(threshold * 100).toFixed(0)}%未満)`, color: 'text-orange-500', icon: '!' };
+    return { text: 'ルールベース対象外', color: 'text-gray-400', icon: '−' };
+  };
+  const filterStatus = getFilterStatus();
+
   return (
-    <div className="bg-white rounded-lg border p-4 shadow-sm hover:shadow-md transition-shadow">
+    <div className={`bg-white rounded-lg border p-4 shadow-sm hover:shadow-md transition-shadow ${isFinalPick ? 'ring-2 ring-green-500' : ''}`}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           <span className="text-xl font-bold">{judgment.symbol}</span>
           <span className={`text-xs px-2 py-0.5 rounded ${
-            (judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative')
+            isV1
               ? 'bg-blue-100 text-blue-700'
               : 'bg-orange-100 text-orange-700'
           }`}>
-            {(judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative') ? 'V1' : 'V2'}
+            {isV1 ? 'V1' : 'V2'}
           </span>
+          {isFinalPick && (
+            <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">
+              採用
+            </span>
+          )}
         </div>
         <DecisionBadge decision={judgment.decision} confidence={judgment.confidence} />
+      </div>
+
+      {/* Filter Status */}
+      <div className={`text-xs mb-2 ${filterStatus.color}`}>
+        <span className="mr-1">{filterStatus.icon}</span>
+        {filterStatus.text}
       </div>
 
       {/* Confidence Bar */}
@@ -309,7 +349,12 @@ function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
   );
 }
 
-export function JudgmentPanel({ judgments, title = 'LLM判断 (Layer 2)' }: JudgmentPanelProps) {
+export function JudgmentPanel({
+  judgments,
+  title = 'LLM判断 (Layer 2)',
+  finalPicks,
+  confidenceThreshold = { conservative: 0.6, aggressive: 0.5 },
+}: JudgmentPanelProps) {
   const [filter, setFilter] = useState<'all' | 'buy' | 'hold' | 'avoid'>('all');
   const [sortBy, setSortBy] = useState<'confidence' | 'score'>('confidence');
 
@@ -324,6 +369,20 @@ export function JudgmentPanel({ judgments, title = 'LLM判断 (Layer 2)' }: Judg
     );
   }
 
+  // Helper to check if a judgment is a final pick
+  const isFinalPick = (j: JudgmentRecord) => {
+    if (!finalPicks) return false;
+    const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
+    const picks = isV1 ? finalPicks.conservative : finalPicks.aggressive;
+    return picks.includes(j.symbol);
+  };
+
+  // Helper to get threshold for a judgment
+  const getThreshold = (j: JudgmentRecord) => {
+    const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
+    return isV1 ? confidenceThreshold.conservative : confidenceThreshold.aggressive;
+  };
+
   // Filter and sort
   const filteredJudgments = judgments
     .filter(j => filter === 'all' || j.decision === filter)
@@ -333,18 +392,45 @@ export function JudgmentPanel({ judgments, title = 'LLM判断 (Layer 2)' }: Judg
     });
 
   // Stats
+  const finalPickCount = judgments.filter(j => isFinalPick(j)).length;
   const stats = {
     total: judgments.length,
     buy: judgments.filter(j => j.decision === 'buy').length,
     hold: judgments.filter(j => j.decision === 'hold').length,
     avoid: judgments.filter(j => j.decision === 'avoid').length,
     avgConfidence: judgments.reduce((sum, j) => sum + j.confidence, 0) / judgments.length,
+    finalPicks: finalPickCount,
   };
 
   return (
     <div className="space-y-4">
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">{title}</h3>
+
+        {/* Pipeline Flow */}
+        <div className="bg-gray-50 rounded-lg p-4 mb-6">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <div className="text-center px-3">
+                <p className="text-lg font-bold text-gray-700">{stats.total}</p>
+                <p className="text-xs text-gray-500">LLM評価</p>
+              </div>
+              <span className="text-gray-400">→</span>
+              <div className="text-center px-3">
+                <p className="text-lg font-bold text-green-600">{stats.buy}</p>
+                <p className="text-xs text-gray-500">BUY判定</p>
+              </div>
+              <span className="text-gray-400">→</span>
+              <div className="text-center px-3">
+                <p className="text-lg font-bold text-blue-600">{stats.finalPicks}</p>
+                <p className="text-xs text-gray-500">最終採用</p>
+              </div>
+            </div>
+            <div className="text-right text-xs text-gray-500">
+              <p>信頼度閾値: V1≥{(confidenceThreshold.conservative * 100).toFixed(0)}% / V2≥{(confidenceThreshold.aggressive * 100).toFixed(0)}%</p>
+            </div>
+          </div>
+        </div>
 
         {/* Stats Summary */}
         <div className="grid grid-cols-5 gap-4 mb-6">
@@ -406,7 +492,12 @@ export function JudgmentPanel({ judgments, title = 'LLM判断 (Layer 2)' }: Judg
       {/* Judgment Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredJudgments.map((judgment) => (
-          <JudgmentCard key={judgment.id} judgment={judgment} />
+          <JudgmentCard
+            key={judgment.id}
+            judgment={judgment}
+            isFinalPick={isFinalPick(judgment)}
+            confidenceThreshold={getThreshold(judgment)}
+          />
         ))}
       </div>
     </div>

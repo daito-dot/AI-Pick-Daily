@@ -238,7 +238,13 @@ function MarketContent({
       {/* LLM Judgment Panel (Layer 2) */}
       {judgments.length > 0 && (
         <div className="mt-8">
-          <JudgmentPanel judgments={judgments} />
+          <JudgmentPanel
+            judgments={judgments}
+            finalPicks={{
+              conservative: conservativePicks,
+              aggressive: aggressivePicks,
+            }}
+          />
         </div>
       )}
 
