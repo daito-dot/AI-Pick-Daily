@@ -36,7 +36,7 @@ def get_open_positions(supabase: SupabaseClient, strategy_mode: str) -> list[dic
     """Get all open positions for a strategy."""
     result = supabase._client.table("virtual_portfolio").select("*").eq(
         "strategy_mode", strategy_mode
-    ).is_("closed_at", "null").execute()
+    ).eq("status", "open").execute()
     return result.data or []
 
 
