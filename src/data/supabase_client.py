@@ -968,9 +968,9 @@ class SupabaseClient:
             "decision": decision,
             "confidence": round(confidence, 4),
             "score": score,
-            "reasoning": json.dumps(reasoning) if isinstance(reasoning, dict) else reasoning,
-            "key_factors": json.dumps(key_factors) if isinstance(key_factors, list) else key_factors,
-            "identified_risks": json.dumps(identified_risks) if isinstance(identified_risks, list) else identified_risks,
+            "reasoning": reasoning,  # Supabase handles JSONB natively
+            "key_factors": key_factors,  # Supabase handles JSONB natively
+            "identified_risks": identified_risks,  # Supabase handles JSONB natively
             "market_regime": market_regime,
             "input_summary": input_summary,
             "model_version": model_version,
