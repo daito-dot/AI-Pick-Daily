@@ -3,15 +3,28 @@
 import { useState } from 'react';
 import type { JudgmentRecord, KeyFactor, FactorImpact } from '@/types';
 
-// Helper to safely parse JSON fields that might be stored as strings
+// Helper to safely parse JSON fields that might be stored as strings (possibly double-encoded)
 function safeParseJson<T>(value: T | string | null | undefined, fallback: T): T {
   if (value === null || value === undefined) return fallback;
   if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
+
+  let result = value;
+  // Try parsing up to 2 times to handle double-encoded JSON
+  for (let i = 0; i < 2; i++) {
+    if (typeof result !== 'string') break;
+    try {
+      result = JSON.parse(result);
+    } catch {
+      break;
+    }
   }
+
+  // If we got a valid parsed result (not a string), return it
+  if (typeof result !== 'string') {
+    return result as T;
+  }
+
+  return fallback;
 }
 
 // Helper to parse key_factors
@@ -125,6 +138,14 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
     return null;
   }
 
+  // Check if we have any displayable content
+  const hasDecisionPoint = !!reasoning.decision_point;
+  const hasTopFactors = Array.isArray(reasoning.top_factors) && reasoning.top_factors.length > 0;
+  const hasUncertainties = Array.isArray(reasoning.uncertainties) && reasoning.uncertainties.length > 0;
+  const hasSteps = Array.isArray(reasoning.steps) && reasoning.steps.length > 0;
+  const hasConfidenceExplanation = !!reasoning.confidence_explanation;
+  const hasAnyContent = hasDecisionPoint || hasTopFactors || hasUncertainties || hasSteps || hasConfidenceExplanation;
+
   return (
     <div className="mt-3 pt-3 border-t border-gray-100">
       <button
@@ -137,56 +158,62 @@ function ReasoningSection({ reasoning }: { reasoning: JudgmentRecord['reasoning'
 
       {expanded && (
         <div className="mt-2 space-y-3 text-sm">
-          {/* Decision Point */}
-          {reasoning.decision_point && (
-            <div className="p-2 bg-blue-50 rounded">
-              <p className="font-medium text-blue-800">決定ポイント:</p>
-              <p className="text-blue-700">{reasoning.decision_point}</p>
-            </div>
-          )}
+          {hasAnyContent ? (
+            <>
+              {/* Decision Point */}
+              {hasDecisionPoint && (
+                <div className="p-2 bg-blue-50 rounded">
+                  <p className="font-medium text-blue-800">決定ポイント:</p>
+                  <p className="text-blue-700">{reasoning.decision_point}</p>
+                </div>
+              )}
 
-          {/* Top Factors */}
-          {Array.isArray(reasoning.top_factors) && reasoning.top_factors.length > 0 && (
-            <div>
-              <p className="font-medium text-gray-700">主要因:</p>
-              <ul className="list-disc list-inside text-gray-600 ml-2">
-                {reasoning.top_factors.map((factor, idx) => (
-                  <li key={idx}>{factor}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+              {/* Top Factors */}
+              {hasTopFactors && (
+                <div>
+                  <p className="font-medium text-gray-700">主要因:</p>
+                  <ul className="list-disc list-inside text-gray-600 ml-2">
+                    {reasoning.top_factors.map((factor, idx) => (
+                      <li key={idx}>{factor}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          {/* Uncertainties */}
-          {Array.isArray(reasoning.uncertainties) && reasoning.uncertainties.length > 0 && (
-            <div>
-              <p className="font-medium text-orange-700">不確実性:</p>
-              <ul className="list-disc list-inside text-orange-600 ml-2">
-                {reasoning.uncertainties.map((u, idx) => (
-                  <li key={idx}>{u}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+              {/* Uncertainties */}
+              {hasUncertainties && (
+                <div>
+                  <p className="font-medium text-orange-700">不確実性:</p>
+                  <ul className="list-disc list-inside text-orange-600 ml-2">
+                    {reasoning.uncertainties.map((u, idx) => (
+                      <li key={idx}>{u}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          {/* Reasoning Steps */}
-          {Array.isArray(reasoning.steps) && reasoning.steps.length > 0 && (
-            <div>
-              <p className="font-medium text-gray-700">推論ステップ:</p>
-              <ol className="list-decimal list-inside text-gray-600 ml-2 space-y-1">
-                {reasoning.steps.map((step, idx) => (
-                  <li key={idx} className="text-xs">{step}</li>
-                ))}
-              </ol>
-            </div>
-          )}
+              {/* Reasoning Steps */}
+              {hasSteps && (
+                <div>
+                  <p className="font-medium text-gray-700">推論ステップ:</p>
+                  <ol className="list-decimal list-inside text-gray-600 ml-2 space-y-1">
+                    {reasoning.steps.map((step, idx) => (
+                      <li key={idx} className="text-xs">{step}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
 
-          {/* Confidence Explanation */}
-          {reasoning.confidence_explanation && (
-            <div className="p-2 bg-gray-50 rounded">
-              <p className="font-medium text-gray-700">信頼度の根拠:</p>
-              <p className="text-gray-600">{reasoning.confidence_explanation}</p>
-            </div>
+              {/* Confidence Explanation */}
+              {hasConfidenceExplanation && (
+                <div className="p-2 bg-gray-50 rounded">
+                  <p className="font-medium text-gray-700">信頼度の根拠:</p>
+                  <p className="text-gray-600">{reasoning.confidence_explanation}</p>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-gray-400 text-sm italic">推論データを解析できませんでした</p>
           )}
         </div>
       )}
