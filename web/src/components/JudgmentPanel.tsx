@@ -177,11 +177,11 @@ function JudgmentCard({ judgment }: { judgment: JudgmentRecord }) {
         <div className="flex items-center gap-3">
           <span className="text-xl font-bold">{judgment.symbol}</span>
           <span className={`text-xs px-2 py-0.5 rounded ${
-            judgment.strategy_mode === 'conservative'
+            (judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative')
               ? 'bg-blue-100 text-blue-700'
               : 'bg-orange-100 text-orange-700'
           }`}>
-            {judgment.strategy_mode === 'conservative' ? 'V1' : 'V2'}
+            {(judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative') ? 'V1' : 'V2'}
           </span>
         </div>
         <DecisionBadge decision={judgment.decision} confidence={judgment.confidence} />
