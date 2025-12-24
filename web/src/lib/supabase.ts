@@ -54,11 +54,36 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
     const today = new Date().toISOString().split('T')[0];
     const modes = STRATEGY_MODES[marketType];
 
+    // First try today's date, then fallback to most recent
+    let targetDate = today;
+
+    // Check if today's picks exist
+    const { data: todayCheck } = await supabase
+      .from('daily_picks')
+      .select('batch_date')
+      .eq('batch_date', today)
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
+      .limit(1);
+
+    // If no data for today, get the most recent date
+    if (!todayCheck || todayCheck.length === 0) {
+      const { data: recentDate } = await supabase
+        .from('daily_picks')
+        .select('batch_date')
+        .in('strategy_mode', [modes.conservative, modes.aggressive])
+        .order('batch_date', { ascending: false })
+        .limit(1);
+
+      if (recentDate && recentDate.length > 0) {
+        targetDate = recentDate[0].batch_date;
+      }
+    }
+
     // Get daily picks for both strategies
     const { data: allPicks, error: picksError } = await supabase
       .from('daily_picks')
       .select('*')
-      .eq('batch_date', today)
+      .eq('batch_date', targetDate)
       .in('strategy_mode', [modes.conservative, modes.aggressive]);
 
     if (picksError) {
@@ -76,11 +101,11 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
     const conservativePicks = allPicks?.find(p => p.strategy_mode === modes.conservative) || null;
     const aggressivePicks = allPicks?.find(p => p.strategy_mode === modes.aggressive) || null;
 
-    // Get stock scores for today (both strategies)
+    // Get stock scores for target date (both strategies)
     const { data: allScores, error: scoresError } = await supabase
       .from('stock_scores')
       .select('*')
-      .eq('batch_date', today)
+      .eq('batch_date', targetDate)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
       .order('composite_score', { ascending: false });
 
@@ -103,7 +128,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
     const { data: regime, error: regimeError } = await supabase
       .from('market_regime_history')
       .select('*')
-      .eq('check_date', today)
+      .eq('check_date', targetDate)
       .single();
 
     // Note: single() returns error if no rows found, so we don't treat it as fatal
@@ -581,10 +606,35 @@ export async function getTodayJudgments(marketType: MarketType = 'us'): Promise<
     const today = new Date().toISOString().split('T')[0];
     const modes = STRATEGY_MODES[marketType];
 
+    // First try today's date, then fallback to most recent
+    let targetDate = today;
+
+    // Check if today's judgments exist
+    const { data: todayCheck } = await supabase
+      .from('judgment_records')
+      .select('batch_date')
+      .eq('batch_date', today)
+      .in('strategy_mode', [modes.conservative, modes.aggressive])
+      .limit(1);
+
+    // If no data for today, get the most recent date
+    if (!todayCheck || todayCheck.length === 0) {
+      const { data: recentDate } = await supabase
+        .from('judgment_records')
+        .select('batch_date')
+        .in('strategy_mode', [modes.conservative, modes.aggressive])
+        .order('batch_date', { ascending: false })
+        .limit(1);
+
+      if (recentDate && recentDate.length > 0) {
+        targetDate = recentDate[0].batch_date;
+      }
+    }
+
     const { data, error } = await supabase
       .from('judgment_records')
       .select('*')
-      .eq('batch_date', today)
+      .eq('batch_date', targetDate)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
       .order('confidence', { ascending: false });
 
@@ -822,7 +872,8 @@ export async function getTodayBatchStatus(): Promise<SystemStatus> {
     const supabase = getSupabase();
     const today = new Date().toISOString().split('T')[0];
 
-    const { data, error } = await supabase
+    // First try today's date
+    let { data, error } = await supabase
       .from('batch_execution_logs')
       .select('*')
       .eq('batch_date', today)
@@ -836,6 +887,23 @@ export async function getTodayBatchStatus(): Promise<SystemStatus> {
         eveningReview: null,
         weeklyResearch: null,
       };
+    }
+
+    // If no data for today, get the most recent date's logs
+    if (!data || data.length === 0) {
+      const { data: recentData, error: recentError } = await supabase
+        .from('batch_execution_logs')
+        .select('*')
+        .order('batch_date', { ascending: false })
+        .order('started_at', { ascending: false })
+        .limit(10);
+
+      if (!recentError && recentData && recentData.length > 0) {
+        // Get the most recent batch_date
+        const mostRecentDate = recentData[0].batch_date;
+        // Filter to only that date's logs
+        data = recentData.filter(log => log.batch_date === mostRecentDate);
+      }
     }
 
     // Get latest of each type

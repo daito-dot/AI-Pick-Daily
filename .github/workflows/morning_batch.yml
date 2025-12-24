@@ -2,9 +2,12 @@ name: Morning Scoring Batch
 
 on:
   schedule:
-    # JST 07:00 = UTC 22:00 (previous day)
-    # Run Monday-Friday only
-    - cron: "0 22 * * 0-4"  # Sun-Thu UTC = Mon-Fri JST morning
+    # ========================================
+    # 米国株 朝バッチ: 毎日 JST 07:00 (UTC 22:00)
+    # - 米国市場終了後のデータを収集・スコアリング
+    # - 月〜金のJST朝に実行 (Sun-Thu UTC)
+    # ========================================
+    - cron: "0 22 * * 0-4"
 
   workflow_dispatch:
     inputs:

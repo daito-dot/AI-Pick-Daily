@@ -2,9 +2,12 @@ name: Evening Review Batch
 
 on:
   schedule:
-    # JST 06:00 = UTC 21:00 (previous day)
-    # This is after US market close (16:00 ET = 05:00 JST next day)
-    # Run Tuesday-Saturday UTC = Mon-Fri US market days
+    # ========================================
+    # 米国株 夕バッチ: 毎日 JST 06:00 (UTC 21:00)
+    # - 前日の推奨銘柄のパフォーマンス追跡
+    # - ポジション管理・決済判断
+    # - 火〜土のJST朝に実行 (Mon-Fri UTC)
+    # ========================================
     - cron: "0 21 * * 1-5"
 
   workflow_dispatch:

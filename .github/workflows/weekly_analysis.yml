@@ -2,9 +2,12 @@ name: Weekly Analysis (Reflection + Research)
 
 on:
   schedule:
-    # JST Sunday 21:00 = UTC Sunday 12:00
-    # Run weekly reflection and research
-    - cron: "0 12 * * 0"  # Every Sunday at 12:00 UTC
+    # ========================================
+    # 週次分析: 毎週日曜 JST 21:00 (UTC 12:00)
+    # - 週間振り返り・学習
+    # - 銘柄リサーチ
+    # ========================================
+    - cron: "0 12 * * 0"
 
   workflow_dispatch:
     inputs:

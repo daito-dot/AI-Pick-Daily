@@ -2,8 +2,11 @@ name: Morning Scoring Batch (Japan)
 
 on:
   schedule:
-    # JST 16:00 = UTC 07:00 (after Japan market close at 15:00-15:30 JST)
-    # Run Monday-Friday only (Japan trading days)
+    # ========================================
+    # 日本株 朝バッチ: 毎日 JST 16:00 (UTC 07:00)
+    # - 日本市場終了後のデータを収集・スコアリング
+    # - 月〜金のJST夕方に実行 (Mon-Fri UTC)
+    # ========================================
     - cron: "0 7 * * 1-5"
 
   workflow_dispatch:

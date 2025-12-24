@@ -2,9 +2,12 @@ name: Evening Review Batch (Japan)
 
 on:
   schedule:
-    # JST 08:00 = UTC 23:00 (previous day)
-    # This runs in the morning JST, reviewing previous day's Japan market performance
-    # Run Tuesday-Saturday UTC = Mon-Fri JST trading days
+    # ========================================
+    # 日本株 夕バッチ: 毎日 JST 08:00 (UTC 23:00)
+    # - 前日の推奨銘柄のパフォーマンス追跡
+    # - ポジション管理・決済判断
+    # - 月〜金のJST朝に実行 (Sun-Thu UTC)
+    # ========================================
     - cron: "0 23 * * 0-4"
 
   workflow_dispatch:
