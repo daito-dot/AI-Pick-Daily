@@ -39,6 +39,7 @@ from src.judgment import (
 from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
 from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
+from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
 
 
 class DataFetchError(Exception):
@@ -255,13 +256,18 @@ def save_results_jp(
     v1_stocks_data: list[StockData],
     v1_final_picks: list[str],
     v2_final_picks: list[str],
-):
+) -> list[str]:
     """Save scoring results to Supabase with market_type='jp'.
 
     Note: Market regime is saved before this function is called.
     Uses final picks (after LLM judgment) for daily_picks table.
     Follows same pattern as US version but adds market_type='jp'.
+
+    Returns:
+        List of error messages (empty if all succeeded)
     """
+    save_errors = []
+
     # Helper to get price for a symbol
     def get_price(symbol: str) -> float:
         return next(
@@ -270,95 +276,136 @@ def save_results_jp(
         )
 
     # Save V1 (jp_conservative) stock scores
-    # Using raw SQL to include market_type which StockScore doesn't have
-    v1_score_data = [
-        {
-            "batch_date": batch_date,
-            "symbol": s.symbol,
-            "strategy_mode": "jp_conservative",
-            "trend_score": int(s.trend_score),
-            "momentum_score": int(s.momentum_score),
-            "value_score": int(s.value_score),
-            "sentiment_score": int(s.sentiment_score),
-            "composite_score": int(s.composite_score),
-            "percentile_rank": int(s.percentile_rank),
-            "reasoning": s.reasoning,
-            "price_at_time": float(get_price(s.symbol)),
-            "market_regime_at_time": market_regime,
-            "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
-            "breakout_score": int(s.breakout_score) if s.breakout_score else None,
-            "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
-            "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
-            "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
-            "market_type": "jp",
-        }
-        for s in dual_result.v1_scores
-    ]
-    supabase._client.table("stock_scores").upsert(
-        v1_score_data,
-        on_conflict="batch_date,symbol,strategy_mode",
-    ).execute()
+    try:
+        v1_score_data = [
+            {
+                "batch_date": batch_date,
+                "symbol": s.symbol,
+                "strategy_mode": "jp_conservative",
+                "trend_score": int(s.trend_score),
+                "momentum_score": int(s.momentum_score),
+                "value_score": int(s.value_score),
+                "sentiment_score": int(s.sentiment_score),
+                "composite_score": int(s.composite_score),
+                "percentile_rank": int(s.percentile_rank),
+                "reasoning": s.reasoning,
+                "price_at_time": float(get_price(s.symbol)),
+                "market_regime_at_time": market_regime,
+                "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
+                "breakout_score": int(s.breakout_score) if s.breakout_score else None,
+                "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
+                "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
+                "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
+                "market_type": "jp",
+            }
+            for s in dual_result.v1_scores
+        ]
+        supabase._client.table("stock_scores").upsert(
+            v1_score_data,
+            on_conflict="batch_date,symbol,strategy_mode",
+        ).execute()
+        logger.info(f"Saved {len(v1_score_data)} V1 (jp_conservative) stock scores")
+    except Exception as e:
+        error_msg = f"Failed to save V1 (jp_conservative) stock scores: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
 
     # Save V2 (jp_aggressive) stock scores
-    v2_score_data = [
-        {
+    try:
+        v2_score_data = [
+            {
+                "batch_date": batch_date,
+                "symbol": s.symbol,
+                "strategy_mode": "jp_aggressive",
+                "trend_score": int(s.trend_score),
+                "momentum_score": int(s.momentum_score),
+                "value_score": int(s.value_score),
+                "sentiment_score": int(s.sentiment_score),
+                "composite_score": int(s.composite_score),
+                "percentile_rank": int(s.percentile_rank),
+                "reasoning": s.reasoning,
+                "price_at_time": float(get_price(s.symbol)),
+                "market_regime_at_time": market_regime,
+                "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
+                "breakout_score": int(s.breakout_score) if s.breakout_score else None,
+                "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
+                "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
+                "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
+                "market_type": "jp",
+            }
+            for s in dual_result.v2_scores
+        ]
+        supabase._client.table("stock_scores").upsert(
+            v2_score_data,
+            on_conflict="batch_date,symbol,strategy_mode",
+        ).execute()
+        logger.info(f"Saved {len(v2_score_data)} V2 (jp_aggressive) stock scores")
+    except Exception as e:
+        error_msg = f"Failed to save V2 (jp_aggressive) stock scores: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    # Save daily picks with idempotency
+    # Delete existing records first, then insert (ensures clean slate for re-runs)
+    try:
+        # Delete existing JP picks for this date
+        supabase.delete_daily_picks_for_date(
+            batch_date,
+            strategy_modes=["jp_conservative", "jp_aggressive"],
+        )
+
+        # Save V1 daily picks (with market_type) - uses LLM-filtered final picks
+        supabase._client.table("daily_picks").upsert({
             "batch_date": batch_date,
-            "symbol": s.symbol,
-            "strategy_mode": "jp_aggressive",
-            "trend_score": int(s.trend_score),
-            "momentum_score": int(s.momentum_score),
-            "value_score": int(s.value_score),
-            "sentiment_score": int(s.sentiment_score),
-            "composite_score": int(s.composite_score),
-            "percentile_rank": int(s.percentile_rank),
-            "reasoning": s.reasoning,
-            "price_at_time": float(get_price(s.symbol)),
-            "market_regime_at_time": market_regime,
-            "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
-            "breakout_score": int(s.breakout_score) if s.breakout_score else None,
-            "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
-            "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
-            "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
+            "strategy_mode": "jp_conservative",
+            "symbols": v1_final_picks,
+            "pick_count": len(v1_final_picks),
+            "market_regime": market_regime,
+            "status": "published",
             "market_type": "jp",
-        }
-        for s in dual_result.v2_scores
-    ]
-    supabase._client.table("stock_scores").upsert(
-        v2_score_data,
-        on_conflict="batch_date,symbol,strategy_mode",
-    ).execute()
+        }, on_conflict="batch_date,strategy_mode").execute()
 
-    # Save V1 daily picks (with market_type) - uses LLM-filtered final picks
-    supabase._client.table("daily_picks").upsert({
-        "batch_date": batch_date,
-        "strategy_mode": "jp_conservative",
-        "symbols": v1_final_picks,
-        "pick_count": len(v1_final_picks),
-        "market_regime": market_regime,
-        "status": "published",
-        "market_type": "jp",
-    }, on_conflict="batch_date,strategy_mode").execute()
+        # Save V2 daily picks (with market_type) - uses LLM-filtered final picks
+        supabase._client.table("daily_picks").upsert({
+            "batch_date": batch_date,
+            "strategy_mode": "jp_aggressive",
+            "symbols": v2_final_picks,
+            "pick_count": len(v2_final_picks),
+            "market_regime": market_regime,
+            "status": "published",
+            "market_type": "jp",
+        }, on_conflict="batch_date,strategy_mode").execute()
 
-    # Save V2 daily picks (with market_type) - uses LLM-filtered final picks
-    supabase._client.table("daily_picks").upsert({
-        "batch_date": batch_date,
-        "strategy_mode": "jp_aggressive",
-        "symbols": v2_final_picks,
-        "pick_count": len(v2_final_picks),
-        "market_regime": market_regime,
-        "status": "published",
-        "market_type": "jp",
-    }, on_conflict="batch_date,strategy_mode").execute()
+        logger.info(f"Saved daily picks: V1={len(v1_final_picks)}, V2={len(v2_final_picks)}")
 
-    logger.info(f"Saved: V1 scores={len(dual_result.v1_scores)}, V2 scores={len(dual_result.v2_scores)}")
-    logger.info(f"Final Picks: V1={v1_final_picks}, V2={v2_final_picks}")
+    except Exception as e:
+        error_msg = f"Failed to save daily picks: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    if save_errors:
+        logger.error(f"Save operation completed with {len(save_errors)} error(s)")
+    else:
+        logger.info(f"Saved: V1 scores={len(dual_result.v1_scores)}, V2 scores={len(dual_result.v2_scores)}")
+        logger.info(f"Final Picks: V1={v1_final_picks}, V2={v2_final_picks}")
+
+    return save_errors
 
 
 def main():
     """Main entry point for Japan stock scoring."""
+    # Track batch timing for monitoring
+    batch_start_time = datetime.utcnow()
+    batch_id = f"jp_{batch_start_time.strftime('%Y%m%d_%H%M%S')}"
+
+    # Initialize judgment tracking variables
+    total_successful_judgments = 0
+    total_failed_judgments = 0
+
     logger.info("=" * 60)
     logger.info("Starting Japan Stock Daily Scoring Batch")
-    logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
+    logger.info(f"Timestamp: {batch_start_time.isoformat()}")
+    logger.info(f"Batch ID: {batch_id}")
     logger.info("=" * 60)
 
     # Start batch logging (include model like US version)
@@ -539,7 +586,7 @@ def main():
                         v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
 
                 # Run V1 Conservative judgments (judge ALL threshold-passed candidates)
-                v1_judgments = run_judgment_for_candidates(
+                v1_judgment_result = run_judgment_for_candidates(
                     judgment_service=judgment_service,
                     finnhub=None,  # No Finnhub for JP stocks
                     supabase=supabase,
@@ -554,14 +601,21 @@ def main():
                 # NEW: Use LLM-first selection (sort by confidence, not rule score)
                 v1_final_picks = select_final_picks(
                     scores=dual_result.v1_scores,
-                    judgments=v1_judgments,
+                    judgments=v1_judgment_result.successful,
                     max_picks=market_regime.max_picks,  # V1 respects regime
                     min_rule_score=v1_min_score,
                     min_confidence=0.6,  # Conservative requires 60% confidence
                 )
 
+                # Log V1 failures if any
+                if v1_judgment_result.failed:
+                    logger.warning(
+                        f"V1 judgment failures ({v1_judgment_result.failure_count}): "
+                        f"{[(sym, err[:50]) for sym, err in v1_judgment_result.failed]}"
+                    )
+
                 # Run V2 Aggressive judgments (judge ALL threshold-passed candidates)
-                v2_judgments = run_judgment_for_candidates(
+                v2_judgment_result = run_judgment_for_candidates(
                     judgment_service=judgment_service,
                     finnhub=None,
                     supabase=supabase,
@@ -577,21 +631,32 @@ def main():
                 v2_max_picks = config.strategy.v2_max_picks if market_regime.max_picks > 0 else 0
                 v2_final_picks = select_final_picks(
                     scores=dual_result.v2_scores,
-                    judgments=v2_judgments,
+                    judgments=v2_judgment_result.successful,
                     max_picks=v2_max_picks,
                     min_rule_score=v2_min_score,
                     min_confidence=0.5,  # Aggressive allows 50% confidence
                 )
+
+                # Log V2 failures if any
+                if v2_judgment_result.failed:
+                    logger.warning(
+                        f"V2 judgment failures ({v2_judgment_result.failure_count}): "
+                        f"{[(sym, err[:50]) for sym, err in v2_judgment_result.failed]}"
+                    )
 
                 logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
                 logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
 
                 # Track judgment results
                 total_candidates = len(v1_candidates) + len(v2_candidates)
-                judgment_ctx.successful_items = len(v1_judgments) + len(v2_judgments)
+                judgment_ctx.successful_items = v1_judgment_result.success_count + v2_judgment_result.success_count
                 judgment_ctx.total_items = total_candidates
-                judgment_ctx.failed_items = total_candidates - judgment_ctx.successful_items
+                judgment_ctx.failed_items = v1_judgment_result.failure_count + v2_judgment_result.failure_count
                 BatchLogger.finish(judgment_ctx)
+
+                # Update monitoring tracking variables
+                total_successful_judgments = v1_judgment_result.success_count + v2_judgment_result.success_count
+                total_failed_judgments = v1_judgment_result.failure_count + v2_judgment_result.failure_count
 
             except Exception as e:
                 logger.error(f"LLM judgment failed, using rule-based picks: {e}")
@@ -604,7 +669,7 @@ def main():
 
         # Step 5: Save results (uses final picks after LLM judgment)
         logger.info("Step 5: Saving results...")
-        save_results_jp(
+        save_errors = save_results_jp(
             supabase=supabase,
             batch_date=today,
             market_regime=regime,
@@ -613,6 +678,11 @@ def main():
             v1_final_picks=v1_final_picks,
             v2_final_picks=v2_final_picks,
         )
+
+        # Track save errors in batch metadata
+        if save_errors:
+            batch_ctx.metadata = batch_ctx.metadata or {}
+            batch_ctx.metadata["save_errors"] = save_errors
 
         # Step 6: Paper Trading - Open positions for picks
         logger.info("Step 6: Opening positions for paper trading...")
@@ -693,6 +763,25 @@ def main():
 
         # Finish batch
         BatchLogger.finish(batch_ctx)
+
+        # Record batch metrics for monitoring
+        batch_end_time = datetime.utcnow()
+        batch_metrics = BatchMetrics(
+            batch_id=batch_id,
+            start_time=batch_start_time,
+            end_time=batch_end_time,
+            total_symbols=len(JP_STOCK_SYMBOLS),
+            successful_judgments=total_successful_judgments,
+            failed_judgments=total_failed_judgments,
+            v1_picks_count=len(v1_final_picks),
+            v2_picks_count=len(v2_final_picks),
+        )
+        record_batch_metrics(batch_metrics)
+
+        # Check and send alerts if thresholds exceeded
+        alerts = check_and_alert(batch_metrics)
+        for alert_message in alerts:
+            send_alert(alert_message, AlertLevel.WARNING)
 
         logger.info("=" * 60)
         logger.info("Japan Stock Daily Scoring completed successfully")

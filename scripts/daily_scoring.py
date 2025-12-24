@@ -15,11 +15,14 @@ Data Source Strategy:
 - Fallback: yfinance (free, but can be blocked)
 - If both fail: Batch fails with clear error (no fake data)
 """
+import argparse
+import json
 import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add src to path
@@ -47,6 +50,168 @@ from src.judgment import (
 )
 from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
+from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
+
+
+# Checkpoint configuration
+CHECKPOINT_DIR = Path("/tmp/ai_pick_daily_checkpoints")
+
+
+@dataclass
+class BatchCheckpoint:
+    """Checkpoint for batch processing progress."""
+    batch_date: str
+    processed_symbols: list[str] = field(default_factory=list)
+    failed_symbols: list[str] = field(default_factory=list)
+    # Store fetched stock data (V1 and V2) keyed by symbol
+    v1_stock_data: dict[str, dict] = field(default_factory=dict)
+    v2_stock_data: dict[str, dict] = field(default_factory=dict)
+    last_updated: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "batch_date": self.batch_date,
+            "processed_symbols": self.processed_symbols,
+            "failed_symbols": self.failed_symbols,
+            "v1_stock_data": self.v1_stock_data,
+            "v2_stock_data": self.v2_stock_data,
+            "last_updated": self.last_updated,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BatchCheckpoint":
+        """Create from dictionary."""
+        return cls(
+            batch_date=data["batch_date"],
+            processed_symbols=data.get("processed_symbols", []),
+            failed_symbols=data.get("failed_symbols", []),
+            v1_stock_data=data.get("v1_stock_data", {}),
+            v2_stock_data=data.get("v2_stock_data", {}),
+            last_updated=data.get("last_updated", datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_checkpoint_path(batch_date: str) -> Path:
+    """Get the checkpoint file path for a given batch date."""
+    return CHECKPOINT_DIR / f"checkpoint_{batch_date}.json"
+
+
+def save_checkpoint(checkpoint: BatchCheckpoint) -> None:
+    """Save checkpoint to file."""
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    checkpoint.last_updated = datetime.now(timezone.utc).isoformat()
+    checkpoint_path = get_checkpoint_path(checkpoint.batch_date)
+
+    # Write to temp file first, then rename for atomicity
+    temp_path = checkpoint_path.with_suffix(".tmp")
+    try:
+        with open(temp_path, "w") as f:
+            json.dump(checkpoint.to_dict(), f, indent=2)
+        temp_path.rename(checkpoint_path)
+    except Exception as e:
+        # Clean up temp file if it exists
+        if temp_path.exists():
+            temp_path.unlink()
+        raise e
+
+
+def load_checkpoint(batch_date: str) -> BatchCheckpoint | None:
+    """Load checkpoint if exists."""
+    checkpoint_path = get_checkpoint_path(batch_date)
+
+    if not checkpoint_path.exists():
+        return None
+
+    try:
+        with open(checkpoint_path, "r") as f:
+            data = json.load(f)
+        return BatchCheckpoint.from_dict(data)
+    except (json.JSONDecodeError, KeyError) as e:
+        # Corrupted checkpoint file - log and return None
+        logging.getLogger(__name__).warning(
+            f"Corrupted checkpoint file {checkpoint_path}, ignoring: {e}"
+        )
+        return None
+
+
+def clear_checkpoint(batch_date: str) -> None:
+    """Clear checkpoint after successful completion."""
+    checkpoint_path = get_checkpoint_path(batch_date)
+
+    if checkpoint_path.exists():
+        checkpoint_path.unlink()
+        logging.getLogger(__name__).info(f"Cleared checkpoint for {batch_date}")
+
+
+def stock_data_to_dict(stock_data: "StockData") -> dict:
+    """Convert StockData to a JSON-serializable dictionary."""
+    return {
+        "symbol": stock_data.symbol,
+        "prices": stock_data.prices,
+        "volumes": stock_data.volumes,
+        "open_price": stock_data.open_price,
+        "pe_ratio": stock_data.pe_ratio,
+        "pb_ratio": stock_data.pb_ratio,
+        "dividend_yield": stock_data.dividend_yield,
+        "week_52_high": stock_data.week_52_high,
+        "week_52_low": stock_data.week_52_low,
+        "news_count_7d": stock_data.news_count_7d,
+        "news_sentiment": stock_data.news_sentiment,
+        "sector_avg_pe": stock_data.sector_avg_pe,
+    }
+
+
+def v2_stock_data_to_dict(stock_data: "V2StockData") -> dict:
+    """Convert V2StockData to a JSON-serializable dictionary."""
+    base = stock_data_to_dict(stock_data)
+    base.update({
+        "vix_level": stock_data.vix_level,
+        "gap_pct": stock_data.gap_pct,
+        "earnings_surprise_pct": stock_data.earnings_surprise_pct,
+        "analyst_revision_score": stock_data.analyst_revision_score,
+    })
+    return base
+
+
+def dict_to_stock_data(data: dict) -> "StockData":
+    """Convert dictionary back to StockData."""
+    return StockData(
+        symbol=data["symbol"],
+        prices=data["prices"],
+        volumes=data["volumes"],
+        open_price=data["open_price"],
+        pe_ratio=data.get("pe_ratio"),
+        pb_ratio=data.get("pb_ratio"),
+        dividend_yield=data.get("dividend_yield"),
+        week_52_high=data.get("week_52_high"),
+        week_52_low=data.get("week_52_low"),
+        news_count_7d=data.get("news_count_7d", 0),
+        news_sentiment=data.get("news_sentiment"),
+        sector_avg_pe=data.get("sector_avg_pe", 25.0),
+    )
+
+
+def dict_to_v2_stock_data(data: dict) -> "V2StockData":
+    """Convert dictionary back to V2StockData."""
+    return V2StockData(
+        symbol=data["symbol"],
+        prices=data["prices"],
+        volumes=data["volumes"],
+        open_price=data["open_price"],
+        pe_ratio=data.get("pe_ratio"),
+        pb_ratio=data.get("pb_ratio"),
+        dividend_yield=data.get("dividend_yield"),
+        week_52_high=data.get("week_52_high"),
+        week_52_low=data.get("week_52_low"),
+        news_count_7d=data.get("news_count_7d", 0),
+        news_sentiment=data.get("news_sentiment"),
+        sector_avg_pe=data.get("sector_avg_pe", 25.0),
+        vix_level=data.get("vix_level", 20.0),
+        gap_pct=data.get("gap_pct"),
+        earnings_surprise_pct=data.get("earnings_surprise_pct"),
+        analyst_revision_score=data.get("analyst_revision_score"),
+    )
 
 
 class DataFetchError(Exception):
@@ -61,7 +226,7 @@ logging.basicConfig(
     level=logging.DEBUG if config.debug else logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(log_dir / f"scoring_{datetime.now().strftime('%Y%m%d')}.log"),
+        logging.FileHandler(log_dir / f"scoring_{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"),
         logging.StreamHandler(),
     ],
 )
@@ -149,7 +314,7 @@ def fetch_market_regime_data(finnhub: FinnhubClient, yf_client: YFinanceClient) 
         candles = finnhub.get_stock_candles(
             "SPY",
             resolution="D",
-            from_timestamp=int((datetime.now() - timedelta(days=60)).timestamp()),
+            from_timestamp=int((datetime.now(timezone.utc) - timedelta(days=60)).timestamp()),
         )
         prices = candles.get("close", [])
         if prices:
@@ -215,7 +380,7 @@ def fetch_stock_data(
         candles = finnhub.get_stock_candles(
             symbol,
             resolution="D",
-            from_timestamp=int((datetime.now() - timedelta(days=250)).timestamp()),
+            from_timestamp=int((datetime.now(timezone.utc) - timedelta(days=250)).timestamp()),
         )
         prices = candles.get("close", [])
         volumes = candles.get("volume", [])
@@ -345,8 +510,8 @@ def filter_earnings(
 ) -> list[str]:
     """Filter out stocks with upcoming earnings."""
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        end_date = (datetime.now() + timedelta(days=within_days)).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        end_date = (datetime.now(timezone.utc) + timedelta(days=within_days)).strftime("%Y-%m-%d")
 
         earnings = finnhub.get_earnings_calendar(from_date=today, to_date=end_date)
         earnings_symbols = {e.symbol for e in earnings}
@@ -364,11 +529,37 @@ def filter_earnings(
         return symbols
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Daily stock scoring batch job"
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from last checkpoint if available",
+    )
+    return parser.parse_args()
+
+
 def main():
     """Main scoring pipeline."""
+    args = parse_args()
+
+    # Track batch timing for monitoring
+    batch_start_time = datetime.now(timezone.utc)
+    batch_id = batch_start_time.strftime("%Y%m%d_%H%M%S")
+
+    # Initialize judgment tracking variables
+    total_successful_judgments = 0
+    total_failed_judgments = 0
+
     logger.info("=" * 50)
     logger.info("Starting daily scoring batch")
-    logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
+    logger.info(f"Timestamp: {batch_start_time.isoformat()}")
+    logger.info(f"Batch ID: {batch_id}")
+    if args.resume:
+        logger.info("Resume mode: enabled")
     logger.info("=" * 50)
 
     # Initialize clients
@@ -406,7 +597,7 @@ def main():
     logger.info(f"Notes: {market_regime.notes}")
 
     # Save market regime
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     supabase.save_market_regime(MarketRegimeRecord(
         check_date=today,
         vix_level=market_regime.vix_level,
@@ -447,20 +638,70 @@ def main():
     candidates = filter_earnings(finnhub, candidates)
     logger.info(f"Candidates after filtering: {len(candidates)}")
 
-    # 3. Fetch stock data
+    # 3. Fetch stock data (with checkpoint support)
     logger.info("Step 3: Fetching stock data...")
+
+    # Initialize checkpoint
+    checkpoint: BatchCheckpoint | None = None
+    if args.resume:
+        checkpoint = load_checkpoint(today)
+        if checkpoint:
+            logger.info(
+                f"Resuming from checkpoint: {len(checkpoint.processed_symbols)} "
+                f"symbols already processed (last updated: {checkpoint.last_updated})"
+            )
+        else:
+            logger.info("No checkpoint found, starting fresh")
+
+    # Create new checkpoint if needed
+    if checkpoint is None:
+        checkpoint = BatchCheckpoint(batch_date=today)
+
     v1_stocks_data = []
     v2_stocks_data = []
     failed_symbols = []
+    restored_count = 0
+
+    # First, restore data from checkpoint for already processed symbols
+    if args.resume and checkpoint.v1_stock_data:
+        for symbol in checkpoint.processed_symbols:
+            if symbol in checkpoint.v1_stock_data and symbol in checkpoint.v2_stock_data:
+                try:
+                    v1_data = dict_to_stock_data(checkpoint.v1_stock_data[symbol])
+                    v2_data = dict_to_v2_stock_data(checkpoint.v2_stock_data[symbol])
+                    v1_stocks_data.append(v1_data)
+                    v2_stocks_data.append(v2_data)
+                    restored_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to restore {symbol} from checkpoint: {e}")
+            elif symbol in checkpoint.failed_symbols:
+                # Symbol was already marked as failed, skip it
+                failed_symbols.append(symbol)
+
+        if restored_count > 0:
+            logger.info(f"Restored {restored_count} symbols from checkpoint")
 
     for symbol in candidates:
+        # Skip already processed symbols (in resume mode)
+        if symbol in checkpoint.processed_symbols:
+            continue
+
         result = fetch_stock_data(finnhub, yf_client, symbol, regime_data["vix"])
         if result:
             v1_data, v2_data = result
             v1_stocks_data.append(v1_data)
             v2_stocks_data.append(v2_data)
+            # Store in checkpoint
+            checkpoint.v1_stock_data[symbol] = stock_data_to_dict(v1_data)
+            checkpoint.v2_stock_data[symbol] = v2_stock_data_to_dict(v2_data)
         else:
             failed_symbols.append(symbol)
+            checkpoint.failed_symbols.append(symbol)
+
+        # Update checkpoint after each symbol
+        checkpoint.processed_symbols.append(symbol)
+        save_checkpoint(checkpoint)
+
         # Small delay to avoid rate limiting
         time.sleep(0.5)
 
@@ -552,7 +793,7 @@ def main():
                     v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
 
             # Run V1 Conservative judgments (judge ALL threshold-passed candidates)
-            v1_judgments = run_judgment_for_candidates(
+            v1_judgment_result = run_judgment_for_candidates(
                 judgment_service=judgment_service,
                 finnhub=finnhub,
                 supabase=supabase,
@@ -566,14 +807,21 @@ def main():
             # NEW: Use LLM-first selection (sort by confidence, not rule score)
             v1_final_picks = select_final_picks(
                 scores=dual_result.v1_scores,
-                judgments=v1_judgments,
+                judgments=v1_judgment_result.successful,
                 max_picks=market_regime.max_picks,  # V1 respects regime
                 min_rule_score=v1_min_score,
                 min_confidence=0.6,  # Conservative requires 60% confidence
             )
 
+            # Log V1 failures if any
+            if v1_judgment_result.failed:
+                logger.warning(
+                    f"V1 judgment failures ({v1_judgment_result.failure_count}): "
+                    f"{[(sym, err[:50]) for sym, err in v1_judgment_result.failed]}"
+                )
+
             # Run V2 Aggressive judgments (judge ALL threshold-passed candidates)
-            v2_judgments = run_judgment_for_candidates(
+            v2_judgment_result = run_judgment_for_candidates(
                 judgment_service=judgment_service,
                 finnhub=finnhub,
                 supabase=supabase,
@@ -588,21 +836,32 @@ def main():
             v2_max_picks = config.strategy.v2_max_picks if market_regime.max_picks > 0 else 0
             v2_final_picks = select_final_picks(
                 scores=dual_result.v2_scores,
-                judgments=v2_judgments,
+                judgments=v2_judgment_result.successful,
                 max_picks=v2_max_picks,
                 min_rule_score=v2_min_score,
                 min_confidence=0.5,  # Aggressive allows 50% confidence
             )
+
+            # Log V2 failures if any
+            if v2_judgment_result.failed:
+                logger.warning(
+                    f"V2 judgment failures ({v2_judgment_result.failure_count}): "
+                    f"{[(sym, err[:50]) for sym, err in v2_judgment_result.failed]}"
+                )
 
             logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
             logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
 
             # Track judgment results
             total_candidates = len(v1_candidates) + len(v2_candidates)
-            judgment_ctx.successful_items = len(v1_judgments) + len(v2_judgments)
+            judgment_ctx.successful_items = v1_judgment_result.success_count + v2_judgment_result.success_count
             judgment_ctx.total_items = total_candidates
-            judgment_ctx.failed_items = total_candidates - judgment_ctx.successful_items
+            judgment_ctx.failed_items = v1_judgment_result.failure_count + v2_judgment_result.failure_count
             BatchLogger.finish(judgment_ctx)
+
+            # Update monitoring tracking variables
+            total_successful_judgments = v1_judgment_result.success_count + v2_judgment_result.success_count
+            total_failed_judgments = v1_judgment_result.failure_count + v2_judgment_result.failure_count
 
         except Exception as e:
             logger.error(f"LLM judgment failed, using rule-based picks: {e}")
@@ -614,7 +873,7 @@ def main():
     else:
         logger.info("LLM judgment disabled, using rule-based picks only")
 
-    # 6. Save results for both strategies
+    # 6. Save results for both strategies (with transaction-like error handling)
     logger.info("Step 6: Saving results...")
 
     # Helper to get price for a symbol
@@ -624,75 +883,113 @@ def main():
             0.0,
         )
 
+    save_errors = []
+
     # Save V1 (Conservative) stock scores
-    v1_stock_scores = [
-        StockScore(
-            batch_date=today,
-            symbol=s.symbol,
-            strategy_mode="conservative",
-            trend_score=s.trend_score,
-            momentum_score=s.momentum_score,
-            value_score=s.value_score,
-            sentiment_score=s.sentiment_score,
-            composite_score=s.composite_score,
-            percentile_rank=s.percentile_rank,
-            reasoning=s.reasoning,
-            price_at_time=get_price(s.symbol),
-            market_regime_at_time=market_regime.regime.value,
-            momentum_12_1_score=s.momentum_12_1_score,
-            breakout_score=s.breakout_score,
-            catalyst_score=s.catalyst_score,
-            risk_adjusted_score=s.risk_adjusted_score,
-            cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
-        )
-        for s in dual_result.v1_scores
-    ]
-    supabase.save_stock_scores(v1_stock_scores)
+    try:
+        v1_stock_scores = [
+            StockScore(
+                batch_date=today,
+                symbol=s.symbol,
+                strategy_mode="conservative",
+                trend_score=s.trend_score,
+                momentum_score=s.momentum_score,
+                value_score=s.value_score,
+                sentiment_score=s.sentiment_score,
+                composite_score=s.composite_score,
+                percentile_rank=s.percentile_rank,
+                reasoning=s.reasoning,
+                price_at_time=get_price(s.symbol),
+                market_regime_at_time=market_regime.regime.value,
+                momentum_12_1_score=s.momentum_12_1_score,
+                breakout_score=s.breakout_score,
+                catalyst_score=s.catalyst_score,
+                risk_adjusted_score=s.risk_adjusted_score,
+                cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
+            )
+            for s in dual_result.v1_scores
+        ]
+        supabase.save_stock_scores(v1_stock_scores)
+        logger.info(f"Saved {len(v1_stock_scores)} V1 (conservative) stock scores")
+    except Exception as e:
+        error_msg = f"Failed to save V1 stock scores: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
 
     # Save V2 (Aggressive) stock scores
-    v2_stock_scores = [
-        StockScore(
+    try:
+        v2_stock_scores = [
+            StockScore(
+                batch_date=today,
+                symbol=s.symbol,
+                strategy_mode="aggressive",
+                trend_score=s.trend_score,
+                momentum_score=s.momentum_score,
+                value_score=s.value_score,
+                sentiment_score=s.sentiment_score,
+                composite_score=s.composite_score,
+                percentile_rank=s.percentile_rank,
+                reasoning=s.reasoning,
+                price_at_time=get_price(s.symbol),
+                market_regime_at_time=market_regime.regime.value,
+                momentum_12_1_score=s.momentum_12_1_score,
+                breakout_score=s.breakout_score,
+                catalyst_score=s.catalyst_score,
+                risk_adjusted_score=s.risk_adjusted_score,
+                cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
+            )
+            for s in dual_result.v2_scores
+        ]
+        supabase.save_stock_scores(v2_stock_scores)
+        logger.info(f"Saved {len(v2_stock_scores)} V2 (aggressive) stock scores")
+    except Exception as e:
+        error_msg = f"Failed to save V2 stock scores: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    # Save daily picks with idempotency (batch save with existing record cleanup)
+    # This ensures re-runs on the same day don't create duplicate records
+    try:
+        v1_pick = DailyPick(
             batch_date=today,
-            symbol=s.symbol,
-            strategy_mode="aggressive",
-            trend_score=s.trend_score,
-            momentum_score=s.momentum_score,
-            value_score=s.value_score,
-            sentiment_score=s.sentiment_score,
-            composite_score=s.composite_score,
-            percentile_rank=s.percentile_rank,
-            reasoning=s.reasoning,
-            price_at_time=get_price(s.symbol),
-            market_regime_at_time=market_regime.regime.value,
-            momentum_12_1_score=s.momentum_12_1_score,
-            breakout_score=s.breakout_score,
-            catalyst_score=s.catalyst_score,
-            risk_adjusted_score=s.risk_adjusted_score,
-            cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
+            symbols=v1_final_picks,
+            pick_count=len(v1_final_picks),
+            market_regime=market_regime.regime.value,
+            strategy_mode="conservative",
+            status="published",
         )
-        for s in dual_result.v2_scores
-    ]
-    supabase.save_stock_scores(v2_stock_scores)
+        v2_pick = DailyPick(
+            batch_date=today,
+            symbols=v2_final_picks,
+            pick_count=len(v2_final_picks),
+            market_regime=market_regime.regime.value,
+            strategy_mode="aggressive",
+            status="published",
+        )
 
-    # Save V1 daily picks (using LLM-filtered picks if available)
-    supabase.save_daily_picks(DailyPick(
-        batch_date=today,
-        symbols=v1_final_picks,
-        pick_count=len(v1_final_picks),
-        market_regime=market_regime.regime.value,
-        strategy_mode="conservative",
-        status="published",
-    ))
+        # Use batch save for atomic-like behavior
+        saved_picks, pick_errors = supabase.save_daily_picks_batch(
+            [v1_pick, v2_pick],
+            delete_existing=True,  # Idempotency: clean up before save
+        )
 
-    # Save V2 daily picks (using LLM-filtered picks if available)
-    supabase.save_daily_picks(DailyPick(
-        batch_date=today,
-        symbols=v2_final_picks,
-        pick_count=len(v2_final_picks),
-        market_regime=market_regime.regime.value,
-        strategy_mode="aggressive",
-        status="published",
-    ))
+        if pick_errors:
+            for err in pick_errors:
+                logger.error(err)
+                save_errors.append(err)
+        else:
+            logger.info(f"Saved daily picks: V1={len(v1_final_picks)}, V2={len(v2_final_picks)}")
+
+    except Exception as e:
+        error_msg = f"Failed to save daily picks: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    # Check if any save operations failed
+    if save_errors:
+        logger.error(f"Save operation completed with {len(save_errors)} error(s)")
+        batch_ctx.metadata = batch_ctx.metadata or {}
+        batch_ctx.metadata["save_errors"] = save_errors
 
     # 7. PAPER TRADING: Open positions for picks
     logger.info("Step 7: Opening positions for paper trading...")
@@ -741,7 +1038,7 @@ def main():
             sp500_candles = finnhub.get_stock_candles(
                 "SPY",
                 resolution="D",
-                from_timestamp=int((datetime.now() - timedelta(days=2)).timestamp()),
+                from_timestamp=int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp()),
             )
             if sp500_candles and len(sp500_candles.get("close", [])) >= 2:
                 closes = sp500_candles["close"]
@@ -775,6 +1072,28 @@ def main():
 
     # Finish batch logging
     BatchLogger.finish(batch_ctx)
+
+    # Clear checkpoint on successful completion
+    clear_checkpoint(today)
+
+    # Record batch metrics for monitoring
+    batch_end_time = datetime.now(timezone.utc)
+    batch_metrics = BatchMetrics(
+        batch_id=batch_id,
+        start_time=batch_start_time,
+        end_time=batch_end_time,
+        total_symbols=len(candidates),
+        successful_judgments=total_successful_judgments,
+        failed_judgments=total_failed_judgments,
+        v1_picks_count=len(v1_final_picks),
+        v2_picks_count=len(v2_final_picks),
+    )
+    record_batch_metrics(batch_metrics)
+
+    # Check and send alerts if thresholds exceeded
+    alerts = check_and_alert(batch_metrics)
+    for alert_message in alerts:
+        send_alert(alert_message, AlertLevel.WARNING)
 
     logger.info("=" * 50)
     logger.info("Daily scoring batch completed successfully")

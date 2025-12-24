@@ -3,8 +3,9 @@ Dual Strategy Composite Score Calculator
 
 Supports both V1 (Conservative) and V2 (Aggressive) strategies.
 """
+import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 import numpy as np
@@ -14,6 +15,35 @@ from .agents import TrendAgent, MomentumAgent, ValueAgent, SentimentAgent, Agent
 from .agents_v2 import Momentum12_1Agent, BreakoutAgent, CatalystAgent, RiskAdjustedAgent, V2StockData
 from .market_regime import MarketRegimeResult, get_adjusted_weights
 from src.config import config
+
+logger = logging.getLogger(__name__)
+
+
+# Expected weight keys for validation
+V1_WEIGHT_KEYS = ["trend", "momentum", "value", "sentiment"]
+V2_WEIGHT_KEYS = ["momentum_12_1", "breakout", "catalyst", "risk_adjusted"]
+
+
+def validate_weights(weights: dict[str, float], expected_keys: list[str]) -> None:
+    """Validate that weights sum to 1.0 and contain expected keys."""
+    total = sum(weights.values())
+    if abs(total - 1.0) > 0.01:
+        raise ValueError(f"Weights must sum to 1.0, got {total:.3f}")
+
+    missing = set(expected_keys) - set(weights.keys())
+    if missing:
+        raise ValueError(f"Missing weight keys: {missing}")
+
+
+def validate_score(score: int, name: str) -> int:
+    """Ensure score is within valid range."""
+    if score < 0:
+        logger.warning(f"{name} score {score} < 0, clamping to 0")
+        return 0
+    if score > 100:
+        logger.warning(f"{name} score {score} > 100, clamping to 100")
+        return 100
+    return score
 
 
 StrategyType = Literal["conservative", "aggressive"]
@@ -58,6 +88,8 @@ class DualScoringResult:
 
 def calculate_v1_score(stock_data: StockData, weights: dict[str, float]) -> dict:
     """Calculate V1 (Conservative) component scores."""
+    validate_weights(weights, V1_WEIGHT_KEYS)
+
     trend_agent = TrendAgent()
     momentum_agent = MomentumAgent()
     value_agent = ValueAgent()
@@ -93,6 +125,8 @@ def calculate_v1_score(stock_data: StockData, weights: dict[str, float]) -> dict
 
 def calculate_v2_score(stock_data: V2StockData, weights: dict[str, float]) -> dict:
     """Calculate V2 (Aggressive) component scores."""
+    validate_weights(weights, V2_WEIGHT_KEYS)
+
     momentum_agent = Momentum12_1Agent()
     breakout_agent = BreakoutAgent()
     catalyst_agent = CatalystAgent()
@@ -137,10 +171,13 @@ def calculate_dual_scores(
 
     Returns tuple of (v1_score, v2_score).
     """
+    if stock_data.symbol != v2_data.symbol:
+        raise ValueError(f"Symbol mismatch: {stock_data.symbol} != {v2_data.symbol}")
+
     v1_result = calculate_v1_score(stock_data, v1_weights)
     v2_result = calculate_v2_score(v2_data, v2_weights)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     v1_score = DualCompositeScore(
         symbol=stock_data.symbol,
@@ -372,5 +409,5 @@ def run_dual_scoring(
         v1_picks=v1_picks,
         v2_picks=v2_picks,
         market_regime=market_regime,
-        cutoff_timestamp=datetime.utcnow(),
+        cutoff_timestamp=datetime.now(timezone.utc),
     )

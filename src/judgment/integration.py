@@ -5,30 +5,94 @@ Integrates JudgmentService with the daily scoring pipeline.
 Handles data transformation and judgment persistence.
 """
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import Protocol, TYPE_CHECKING, runtime_checkable
 
 from src.data.finnhub_client import FinnhubClient, NewsItem
 from src.data.supabase_client import SupabaseClient
+from src.utils.technical import calculate_rsi
 from .service import JudgmentService
 from .models import JudgmentOutput, KeyFactor, ReasoningTrace
 
+
+@runtime_checkable
+class StockDataLike(Protocol):
+    """Protocol for stock data objects (StockData or V2StockData)."""
+
+    symbol: str
+    prices: list[float]
+    volumes: list[float]
+    pe_ratio: float | None
+    pb_ratio: float | None
+    dividend_yield: float | None
+    week_52_high: float | None
+    week_52_low: float | None
+
+
+@runtime_checkable
+class ScoredStockLike(Protocol):
+    """Protocol for scored stock objects (CompositeScore or DualCompositeScore)."""
+
+    trend_score: int
+    momentum_score: int
+    value_score: int
+    sentiment_score: int
+    composite_score: int
+    percentile_rank: int
+
+
+@dataclass
+class JudgmentResult:
+    """
+    Result container for batch judgment execution.
+
+    Tracks both successful judgments and failures for better
+    error visibility and debugging.
+    """
+    successful: list[JudgmentOutput] = field(default_factory=list)
+    failed: list[tuple[str, str]] = field(default_factory=list)  # (symbol, error_message)
+
+    @property
+    def failure_rate(self) -> float:
+        """Calculate the failure rate as a proportion of total attempts."""
+        total = len(self.successful) + len(self.failed)
+        return len(self.failed) / total if total > 0 else 0.0
+
+    @property
+    def total_count(self) -> int:
+        """Total number of judgment attempts."""
+        return len(self.successful) + len(self.failed)
+
+    @property
+    def success_count(self) -> int:
+        """Number of successful judgments."""
+        return len(self.successful)
+
+    @property
+    def failure_count(self) -> int:
+        """Number of failed judgments."""
+        return len(self.failed)
+
 if TYPE_CHECKING:
     from src.data.yfinance_client import YFinanceClient
+    from src.scoring.agents import StockData
+    from src.scoring.agents_v2 import V2StockData
+    from src.scoring.composite import CompositeScore
+    from src.scoring.composite_v2 import DualCompositeScore
 
 
 logger = logging.getLogger(__name__)
 
 
 def prepare_stock_data_for_judgment(
-    stock_data: Any,  # StockData or V2StockData
+    stock_data: StockDataLike,
 ) -> dict:
     """
     Convert scoring StockData to judgment format.
 
     Args:
-        stock_data: StockData or V2StockData instance
+        stock_data: Object conforming to StockDataLike protocol (StockData or V2StockData)
 
     Returns:
         Dict suitable for judgment prompt
@@ -45,7 +109,7 @@ def prepare_stock_data_for_judgment(
     # Calculate RSI
     rsi = None
     if len(prices) >= 15:
-        rsi = _calculate_rsi(prices, 14)
+        rsi = calculate_rsi(prices, 14)
 
     # Calculate volume ratio
     avg_volume = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else (sum(volumes) / len(volumes) if volumes else 0)
@@ -138,13 +202,13 @@ def fetch_news_for_judgment(
 
 
 def prepare_scores_for_judgment(
-    score: Any,  # ScoredStock
+    score: ScoredStockLike,
 ) -> dict:
     """
     Convert rule-based scores to judgment format.
 
     Args:
-        score: ScoredStock instance
+        score: Object conforming to ScoredStockLike protocol (CompositeScore or DualCompositeScore)
 
     Returns:
         Dict of scores for judgment
@@ -228,13 +292,13 @@ def run_judgment_for_candidates(
     judgment_service: JudgmentService,
     finnhub: FinnhubClient | None,
     supabase: SupabaseClient,
-    candidates: list[tuple[Any, Any]],  # List of (stock_data, scored_stock)
+    candidates: list[tuple[StockDataLike, ScoredStockLike]],
     strategy_mode: str,
     market_regime: str,
     batch_date: str,
     top_n: int | None = None,  # None = judge all candidates
     yfinance: "YFinanceClient | None" = None,
-) -> list[JudgmentOutput]:
+) -> JudgmentResult:
     """
     Run LLM judgment for candidates that passed rule-based threshold.
 
@@ -246,7 +310,7 @@ def run_judgment_for_candidates(
         judgment_service: JudgmentService instance
         finnhub: Finnhub client for news (can be None for JP stocks)
         supabase: Supabase client for persistence
-        candidates: List of (stock_data, scored_stock) tuples that passed threshold
+        candidates: List of (StockDataLike, ScoredStockLike) tuples that passed threshold
         strategy_mode: 'conservative' or 'aggressive'
         market_regime: Current market regime
         batch_date: Date string
@@ -254,9 +318,9 @@ def run_judgment_for_candidates(
         yfinance: Optional yfinance client for news fallback (used for JP stocks)
 
     Returns:
-        List of JudgmentOutput instances
+        JudgmentResult containing successful judgments and failed attempts
     """
-    judgments = []
+    result = JudgmentResult()
 
     # Apply top_n limit only if specified (backward compatibility)
     # For LLM-first selection, pass top_n=None to judge all candidates
@@ -289,7 +353,7 @@ def run_judgment_for_candidates(
             # Save to database
             save_judgment_to_db(supabase, judgment, batch_date)
 
-            judgments.append(judgment)
+            result.successful.append(judgment)
 
             logger.info(
                 f"{symbol}: {judgment.decision} "
@@ -297,10 +361,22 @@ def run_judgment_for_candidates(
             )
 
         except Exception as e:
-            logger.error(f"Failed to judge {symbol}: {e}")
+            error_msg = str(e)
+            logger.error(f"Failed to judge {symbol}: {error_msg}")
+            result.failed.append((symbol, error_msg))
             continue
 
-    return judgments
+    # Log summary with failure information
+    if result.failed:
+        logger.warning(
+            f"Judgment completed with {result.failure_count} failures "
+            f"(failure rate: {result.failure_rate:.1%}): "
+            f"{[sym for sym, _ in result.failed]}"
+        )
+    else:
+        logger.info(f"Judgment completed successfully for all {result.success_count} candidates")
+
+    return result
 
 
 def filter_picks_by_judgment(
@@ -387,25 +463,3 @@ def select_final_picks(
         min_rule_score=min_rule_score,
         min_confidence=min_confidence,
     )
-
-
-def _calculate_rsi(prices: list[float], period: int = 14) -> float:
-    """Calculate RSI for a price series."""
-    if len(prices) < period + 1:
-        return 50.0  # Default to neutral
-
-    changes = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-
-    gains = [c if c > 0 else 0 for c in changes[-period:]]
-    losses = [-c if c < 0 else 0 for c in changes[-period:]]
-
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-
-    if avg_loss == 0:
-        return 100.0
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-
-    return rsi

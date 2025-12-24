@@ -24,6 +24,7 @@ from .integration import (
     filter_picks_by_judgment,
     save_judgment_to_db,
     select_final_picks,
+    JudgmentResult,
 )
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "KeyFactor",
     "JudgmentDecision",
     "JudgmentService",
+    "JudgmentResult",
     "run_judgment_for_candidates",
     "filter_picks_by_judgment",
     "save_judgment_to_db",

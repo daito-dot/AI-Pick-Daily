@@ -136,6 +136,88 @@ class SupabaseClient:
 
         return result.data or []
 
+    def delete_daily_picks_for_date(
+        self,
+        batch_date: str,
+        strategy_modes: list[str] | None = None,
+    ) -> int:
+        """
+        Delete daily picks for a specific date (for idempotent re-runs).
+
+        Args:
+            batch_date: Date in YYYY-MM-DD format
+            strategy_modes: Optional list of strategy modes to delete.
+                           If None, deletes all picks for that date.
+
+        Returns:
+            Number of records deleted
+        """
+        query = self._client.table("daily_picks").delete().eq(
+            "batch_date", batch_date
+        )
+
+        if strategy_modes:
+            query = query.in_("strategy_mode", strategy_modes)
+
+        result = query.execute()
+        return len(result.data) if result.data else 0
+
+    def save_daily_picks_batch(
+        self,
+        picks_list: list[DailyPick],
+        delete_existing: bool = True,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """
+        Save multiple daily picks as a batch with idempotency support.
+
+        This method provides atomic-like behavior by:
+        1. Optionally deleting existing records for the same date/strategy combinations
+        2. Inserting all new picks via upsert
+
+        Args:
+            picks_list: List of DailyPick records to save
+            delete_existing: If True, delete existing records first for clean upsert
+
+        Returns:
+            Tuple of (saved_records, errors)
+            - saved_records: List of successfully saved records
+            - errors: List of error messages (empty if all succeeded)
+        """
+        if not picks_list:
+            return [], []
+
+        saved_records = []
+        errors = []
+
+        # Group by batch_date for potential cleanup
+        batch_date = picks_list[0].batch_date
+        strategy_modes = [p.strategy_mode for p in picks_list]
+
+        # Step 1: Delete existing records if requested (for idempotency)
+        if delete_existing:
+            try:
+                deleted_count = self.delete_daily_picks_for_date(
+                    batch_date, strategy_modes
+                )
+                if deleted_count > 0:
+                    # Log deletion for debugging (caller should log via BatchLogger)
+                    pass
+            except Exception as e:
+                errors.append(f"Failed to delete existing picks: {str(e)}")
+                # Continue with upsert anyway - it will overwrite
+
+        # Step 2: Save all picks
+        for pick in picks_list:
+            try:
+                result = self.save_daily_picks(pick)
+                saved_records.append(result)
+            except Exception as e:
+                errors.append(
+                    f"Failed to save {pick.strategy_mode} picks: {str(e)}"
+                )
+
+        return saved_records, errors
+
     # ============ Stock Scores ============
 
     def save_stock_scores(self, scores: list[StockScore]) -> list[dict[str, Any]]:
