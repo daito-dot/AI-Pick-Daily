@@ -249,13 +249,20 @@ function MarketContent({
                 symbol: s.symbol,
                 composite_score: s.composite_score,
                 percentile_rank: s.percentile_rank,
+                price_at_time: s.price_at_time,
+                return_1d: s.return_1d,
+                return_5d: s.return_5d,
               })),
               aggressive: aggressiveScores.map(s => ({
                 symbol: s.symbol,
                 composite_score: s.composite_score,
                 percentile_rank: s.percentile_rank,
+                price_at_time: s.price_at_time,
+                return_1d: s.return_1d,
+                return_5d: s.return_5d,
               })),
             }}
+            isJapan={isJapan}
           />
         </div>
       )}

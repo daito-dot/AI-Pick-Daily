@@ -47,6 +47,9 @@ interface RuleBasedScore {
   symbol: string;
   composite_score: number;
   percentile_rank: number;
+  price_at_time?: number;
+  return_1d?: number | null;
+  return_5d?: number | null;
 }
 
 interface JudgmentPanelProps {
@@ -68,6 +71,7 @@ interface JudgmentPanelProps {
     conservative: number;
     aggressive: number;
   };
+  isJapan?: boolean;
 }
 
 function DecisionBadge({ decision, confidence }: { decision: string; confidence: number }) {
@@ -109,6 +113,313 @@ function ImpactIcon({ impact }: { impact: FactorImpact }) {
     return <span className="text-red-600">-</span>;
   }
   return <span className="text-gray-400">=</span>;
+}
+
+// Stock Detail Modal
+interface StockDetailModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  symbol: string;
+  judgment: JudgmentRecord;
+  ruleBasedScore?: RuleBasedScore;
+  keyFactors: KeyFactor[];
+  identifiedRisks: string[];
+  reasoning: JudgmentRecord['reasoning'] | null;
+  isJapan?: boolean;
+}
+
+function StockDetailModal({
+  isOpen,
+  onClose,
+  symbol,
+  judgment,
+  ruleBasedScore,
+  keyFactors,
+  identifiedRisks,
+  reasoning,
+  isJapan = false,
+}: StockDetailModalProps) {
+  if (!isOpen) return null;
+
+  const currencySymbol = isJapan ? '¥' : '$';
+  const price = ruleBasedScore?.price_at_time;
+  const return1d = ruleBasedScore?.return_1d;
+  const return5d = ruleBasedScore?.return_5d;
+
+  // Generate mini price chart data (simulated from returns)
+  const generateChartPoints = () => {
+    if (return5d === null || return5d === undefined || !price) {
+      return null;
+    }
+    // Estimate 5-day price movement based on return
+    const dailyReturn = return5d / 5;
+    const points = [];
+    let currentPrice = price / (1 + return5d / 100);
+    for (let i = 0; i <= 5; i++) {
+      points.push({
+        day: i,
+        price: currentPrice,
+      });
+      currentPrice *= (1 + dailyReturn / 100);
+    }
+    return points;
+  };
+
+  const chartPoints = generateChartPoints();
+  const minPrice = chartPoints ? Math.min(...chartPoints.map(p => p.price)) : 0;
+  const maxPrice = chartPoints ? Math.max(...chartPoints.map(p => p.price)) : 0;
+  const priceRange = maxPrice - minPrice || 1;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold">{symbol}</h2>
+            {price && (
+              <p className="text-lg text-gray-600">
+                {currencySymbol}{isJapan ? Math.round(price).toLocaleString() : price.toFixed(2)}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 text-2xl"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Price Chart */}
+          {chartPoints && (
+            <div className="bg-gray-50 rounded-lg p-4">
+              <h3 className="text-sm font-medium text-gray-700 mb-3">価格推移（5日間）</h3>
+              <div className="relative h-32">
+                <svg className="w-full h-full" viewBox="0 0 100 50">
+                  {/* Grid lines */}
+                  <line x1="0" y1="25" x2="100" y2="25" stroke="#e5e7eb" strokeWidth="0.5" />
+
+                  {/* Price line */}
+                  <polyline
+                    fill="none"
+                    stroke={(return5d ?? 0) >= 0 ? '#22c55e' : '#ef4444'}
+                    strokeWidth="2"
+                    points={chartPoints.map((p, i) =>
+                      `${(i / 5) * 100},${50 - ((p.price - minPrice) / priceRange) * 45}`
+                    ).join(' ')}
+                  />
+
+                  {/* Points */}
+                  {chartPoints.map((p, i) => (
+                    <circle
+                      key={i}
+                      cx={(i / 5) * 100}
+                      cy={50 - ((p.price - minPrice) / priceRange) * 45}
+                      r="2"
+                      fill={(return5d ?? 0) >= 0 ? '#22c55e' : '#ef4444'}
+                    />
+                  ))}
+                </svg>
+              </div>
+              <div className="flex justify-between text-xs text-gray-500 mt-2">
+                <span>5日前</span>
+                <span>今日</span>
+              </div>
+            </div>
+          )}
+
+          {/* Returns */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-gray-50 rounded-lg p-4 text-center">
+              <p className="text-sm text-gray-500 mb-1">1日リターン</p>
+              <p className={`text-2xl font-bold ${
+                (return1d ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {return1d !== null && return1d !== undefined
+                  ? `${return1d >= 0 ? '+' : ''}${return1d.toFixed(2)}%`
+                  : '-'}
+              </p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-4 text-center">
+              <p className="text-sm text-gray-500 mb-1">5日リターン</p>
+              <p className={`text-2xl font-bold ${
+                (return5d ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {return5d !== null && return5d !== undefined
+                  ? `${return5d >= 0 ? '+' : ''}${return5d.toFixed(2)}%`
+                  : '-'}
+              </p>
+            </div>
+          </div>
+
+          {/* Scores */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-blue-50 rounded-lg p-4 text-center">
+              <p className="text-sm text-blue-600 mb-1">ルールベーススコア</p>
+              <p className="text-2xl font-bold text-blue-800">
+                {ruleBasedScore?.composite_score ?? '-'}点
+              </p>
+              {ruleBasedScore?.percentile_rank && (
+                <p className="text-xs text-blue-500">
+                  上位 {(100 - ruleBasedScore.percentile_rank).toFixed(0)}%
+                </p>
+              )}
+            </div>
+            <div className="bg-purple-50 rounded-lg p-4 text-center">
+              <p className="text-sm text-purple-600 mb-1">LLMスコア</p>
+              <p className="text-2xl font-bold text-purple-800">
+                {judgment.score}点
+              </p>
+              <p className="text-xs text-purple-500">
+                信頼度: {(judgment.confidence * 100).toFixed(0)}%
+              </p>
+            </div>
+          </div>
+
+          {/* Decision */}
+          <div className={`rounded-lg p-4 ${
+            judgment.decision === 'buy' ? 'bg-green-50' :
+            judgment.decision === 'hold' ? 'bg-yellow-50' : 'bg-red-50'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-600">LLM判定</span>
+              <span className={`text-xl font-bold ${
+                judgment.decision === 'buy' ? 'text-green-700' :
+                judgment.decision === 'hold' ? 'text-yellow-700' : 'text-red-700'
+              }`}>
+                {judgment.decision.toUpperCase()}
+              </span>
+            </div>
+          </div>
+
+          {/* Key Factors */}
+          {keyFactors.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-700 mb-3">重要ファクター</h3>
+              <div className="space-y-2">
+                {keyFactors.map((factor, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-3 rounded-lg ${
+                      factor.impact === 'positive' ? 'bg-green-50' :
+                      factor.impact === 'negative' ? 'bg-red-50' : 'bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className={`mt-0.5 ${
+                        factor.impact === 'positive' ? 'text-green-600' :
+                        factor.impact === 'negative' ? 'text-red-600' : 'text-gray-400'
+                      }`}>
+                        {factor.impact === 'positive' ? '▲' :
+                         factor.impact === 'negative' ? '▼' : '■'}
+                      </span>
+                      <div className="flex-1">
+                        <p className="text-sm">{factor.description}</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {factor.source} • 重み: {(factor.weight * 100).toFixed(0)}%
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Risks */}
+          {identifiedRisks.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-red-700 mb-3">識別されたリスク</h3>
+              <ul className="space-y-2">
+                {identifiedRisks.map((risk, idx) => (
+                  <li key={idx} className="flex items-start gap-2 text-sm text-red-600 bg-red-50 p-2 rounded">
+                    <span>⚠</span>
+                    <span>{risk}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Reasoning */}
+          {reasoning && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-700 mb-3">推論プロセス</h3>
+              <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
+                {reasoning.decision_point && (
+                  <div className="bg-blue-50 p-3 rounded">
+                    <p className="font-medium text-blue-800">決定ポイント</p>
+                    <p className="text-blue-700">{reasoning.decision_point}</p>
+                  </div>
+                )}
+                {reasoning.top_factors && reasoning.top_factors.length > 0 && (
+                  <div>
+                    <p className="font-medium text-gray-700">主要因</p>
+                    <ul className="list-disc list-inside text-gray-600 mt-1">
+                      {reasoning.top_factors.map((f, i) => <li key={i}>{f}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {reasoning.confidence_explanation && (
+                  <div>
+                    <p className="font-medium text-gray-700">信頼度の根拠</p>
+                    <p className="text-gray-600">{reasoning.confidence_explanation}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Model Info */}
+          <div className="text-xs text-gray-400 pt-4 border-t">
+            <p>Model: {judgment.model_version} • Prompt: v{judgment.prompt_version}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Trend Indicator showing price momentum
+function TrendIndicator({ return1d, return5d }: { return1d?: number | null; return5d?: number | null }) {
+  // Use 1-day return for short-term trend, 5-day for medium-term
+  const shortTerm = return1d ?? 0;
+  const mediumTerm = return5d ?? 0;
+
+  // Determine arrow based on returns
+  const getArrow = (ret: number, threshold: number = 0.5) => {
+    if (ret > threshold * 2) return { arrow: '↑↑', color: 'text-green-600', label: '強い上昇' };
+    if (ret > threshold) return { arrow: '↑', color: 'text-green-500', label: '上昇' };
+    if (ret < -threshold * 2) return { arrow: '↓↓', color: 'text-red-600', label: '強い下落' };
+    if (ret < -threshold) return { arrow: '↓', color: 'text-red-500', label: '下落' };
+    return { arrow: '→', color: 'text-gray-400', label: '横ばい' };
+  };
+
+  const short = getArrow(shortTerm, 1);
+  const medium = getArrow(mediumTerm, 2);
+
+  if (return1d === null && return5d === null) {
+    return null;
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      {return1d !== null && return1d !== undefined && (
+        <div className="flex items-center gap-1" title={`1日: ${shortTerm >= 0 ? '+' : ''}${shortTerm.toFixed(1)}%`}>
+          <span className="text-xs text-gray-400">1D</span>
+          <span className={`font-bold ${short.color}`}>{short.arrow}</span>
+        </div>
+      )}
+      {return5d !== null && return5d !== undefined && (
+        <div className="flex items-center gap-1" title={`5日: ${mediumTerm >= 0 ? '+' : ''}${mediumTerm.toFixed(1)}%`}>
+          <span className="text-xs text-gray-400">5D</span>
+          <span className={`font-bold ${medium.color}`}>{medium.arrow}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function FactorTypeIcon({ type }: { type: string }) {
@@ -251,10 +562,12 @@ interface JudgmentCardProps {
   scoreThreshold?: number;
   ruleBasedRank?: number;
   maxPicks?: number;
+  isJapan?: boolean;
 }
 
-function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedScore, scoreThreshold, ruleBasedRank, maxPicks }: JudgmentCardProps) {
+function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedScore, scoreThreshold, ruleBasedRank, maxPicks, isJapan = false }: JudgmentCardProps) {
   const [showDetails, setShowDetails] = useState(false);
+  const [showModal, setShowModal] = useState(false);
 
   // Parse JSON fields that might be stored as strings (legacy data)
   const keyFactors = parseKeyFactors(judgment.key_factors);
@@ -283,11 +596,15 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
   const filterStatus = getFilterStatus();
 
   return (
+    <>
     <div className={`bg-white rounded-lg border p-4 shadow-sm hover:shadow-md transition-shadow ${isFinalPick ? 'ring-2 ring-green-500' : ''}`}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      {/* Header - Clickable to open modal */}
+      <div
+        className="flex items-center justify-between mb-3 cursor-pointer group"
+        onClick={() => setShowModal(true)}
+      >
         <div className="flex items-center gap-3">
-          <span className="text-xl font-bold">{judgment.symbol}</span>
+          <span className="text-xl font-bold group-hover:text-blue-600 transition-colors">{judgment.symbol}</span>
           <span className={`text-xs px-2 py-0.5 rounded ${
             isV1
               ? 'bg-blue-100 text-blue-700'
@@ -300,8 +617,16 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
               採用
             </span>
           )}
+          {/* Trend Indicator */}
+          <TrendIndicator
+            return1d={ruleBasedScore?.return_1d}
+            return5d={ruleBasedScore?.return_5d}
+          />
         </div>
-        <DecisionBadge decision={judgment.decision} confidence={judgment.confidence} />
+        <div className="flex items-center gap-2">
+          <DecisionBadge decision={judgment.decision} confidence={judgment.confidence} />
+          <span className="text-gray-300 group-hover:text-blue-400 transition-colors text-lg">›</span>
+        </div>
       </div>
 
       {/* Filter Status */}
@@ -397,6 +722,20 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
         </div>
       )}
     </div>
+
+    {/* Stock Detail Modal */}
+    <StockDetailModal
+      isOpen={showModal}
+      onClose={() => setShowModal(false)}
+      symbol={judgment.symbol}
+      judgment={judgment}
+      ruleBasedScore={ruleBasedScore}
+      keyFactors={keyFactors}
+      identifiedRisks={identifiedRisks}
+      reasoning={reasoning}
+      isJapan={isJapan}
+    />
+    </>
   );
 }
 
@@ -407,6 +746,7 @@ export function JudgmentPanel({
   confidenceThreshold = { conservative: 0.6, aggressive: 0.5 },
   ruleBasedScores,
   scoreThreshold = { conservative: 60, aggressive: 75 },
+  isJapan = false,
 }: JudgmentPanelProps) {
   const [filter, setFilter] = useState<'all' | 'buy' | 'hold' | 'avoid'>('all');
   const [sortBy, setSortBy] = useState<'confidence' | 'score'>('confidence');
@@ -588,6 +928,7 @@ export function JudgmentPanel({
             scoreThreshold={getScoreThreshold(judgment)}
             ruleBasedRank={getRuleBasedRank(judgment)}
             maxPicks={getMaxPicks(judgment)}
+            isJapan={isJapan}
           />
         ))}
       </div>
