@@ -209,13 +209,89 @@ def select_picks(
     max_picks: int,
     min_score: int,
 ) -> list[str]:
-    """Select top picks based on percentile rank."""
+    """
+    Select picks based on percentile rank (legacy method).
+
+    Note: This is the original selection logic. For LLM-integrated selection,
+    use select_picks_with_llm() instead.
+    """
     if max_picks == 0:
         return []
 
     qualified = [s for s in scores if s.composite_score >= min_score]
     qualified.sort(key=lambda x: x.percentile_rank, reverse=True)
     return [s.symbol for s in qualified[:max_picks]]
+
+
+def get_threshold_passed_symbols(
+    scores: list[DualCompositeScore],
+    min_score: int,
+) -> set[str]:
+    """
+    Get symbols that passed the rule-based threshold.
+
+    This is used to determine which stocks should be:
+    1. Evaluated by LLM
+    2. Tracked for performance
+
+    Args:
+        scores: Rule-based scores
+        min_score: Minimum score threshold (risk filter)
+
+    Returns:
+        Set of symbols that passed the threshold
+    """
+    return {s.symbol for s in scores if s.composite_score >= min_score}
+
+
+def select_picks_with_llm(
+    scores: list[DualCompositeScore],
+    llm_judgments: list,  # list[JudgmentOutput] - imported in integration
+    max_picks: int,
+    min_rule_score: int,
+    min_confidence: float = 0.5,
+) -> list[str]:
+    """
+    Select picks using LLM judgment (new LLM-first selection logic).
+
+    Flow:
+    1. Rule threshold filters for risk (pass/fail only)
+    2. LLM BUY decision & confidence filters
+    3. Sort by LLM confidence (not rule score)
+    4. Return top N picks
+
+    Args:
+        scores: Rule-based composite scores (for threshold filter)
+        llm_judgments: LLM JudgmentOutput instances
+        max_picks: Maximum number of picks to return
+        min_rule_score: Minimum rule score (risk filter threshold)
+        min_confidence: Minimum LLM confidence to accept
+
+    Returns:
+        List of selected symbols (sorted by LLM confidence)
+    """
+    if max_picks == 0:
+        return []
+
+    # Step 1: Get symbols that passed rule-based risk filter
+    risk_cleared = get_threshold_passed_symbols(scores, min_rule_score)
+
+    # Step 2: Filter LLM judgments
+    # - Must be 'buy' decision
+    # - Must meet confidence threshold
+    # - Must have passed rule-based threshold
+    qualified_judgments = [
+        j for j in llm_judgments
+        if j.decision == "buy"
+        and j.confidence >= min_confidence
+        and j.symbol in risk_cleared
+    ]
+
+    # Step 3: Sort by LLM confidence (not rule score!)
+    qualified_judgments.sort(key=lambda x: x.confidence, reverse=True)
+
+    # Step 4: Return top N picks
+    return [j.symbol for j in qualified_judgments[:max_picks]]
 
 
 def run_dual_scoring(

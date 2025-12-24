@@ -574,24 +574,23 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedSco
   const identifiedRisks = parseRisks(judgment.identified_risks);
   const reasoning = parseReasoning(judgment.reasoning);
 
-  // Determine filter status
+  // Determine filter status (NEW: LLM-first selection logic)
   const isV1 = judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative';
   const confThreshold = confidenceThreshold ?? (isV1 ? 0.6 : 0.5);
   const passedLLM = judgment.decision === 'buy';
   const passedConfidence = judgment.confidence >= confThreshold;
   const ruleScore = ruleBasedScore?.composite_score ?? 0;
-  const scoreThresh = scoreThreshold ?? (isV1 ? 60 : 75);
+  const scoreThresh = scoreThreshold ?? (isV1 ? 60 : 45);  // V2 uses lower threshold
   const passedScoreThreshold = ruleScore >= scoreThresh;
-  const passedMaxPicks = ruleBasedRank !== undefined && maxPicks !== undefined ? ruleBasedRank <= maxPicks : false;
 
-  // Get filter status message
+  // Get filter status message (reflects LLM-first selection)
   const getFilterStatus = () => {
     if (isFinalPick) return { text: '最終ピック採用', color: 'text-green-600', icon: '✓' };
+    if (!passedScoreThreshold) return { text: `リスクフィルター (${scoreThresh}点未満)`, color: 'text-orange-500', icon: '!' };
     if (!passedLLM) return { text: `LLM: ${judgment.decision.toUpperCase()}`, color: 'text-gray-500', icon: '−' };
     if (!passedConfidence) return { text: `信頼度不足 (${(confThreshold * 100).toFixed(0)}%未満)`, color: 'text-orange-500', icon: '!' };
-    if (!passedScoreThreshold) return { text: `スコア不足 (${scoreThresh}点未満)`, color: 'text-orange-500', icon: '!' };
-    if (!passedMaxPicks && ruleBasedRank !== undefined) return { text: `順位外 (${ruleBasedRank}位/${maxPicks}枠)`, color: 'text-gray-400', icon: '−' };
-    return { text: 'ルールベース対象外', color: 'text-gray-400', icon: '−' };
+    // Passed all filters but not picked = max picks limit reached
+    return { text: '採用枠外 (信頼度順で選定)', color: 'text-gray-400', icon: '−' };
   };
   const filterStatus = getFilterStatus();
 
@@ -745,14 +744,14 @@ export function JudgmentPanel({
   finalPicks,
   confidenceThreshold = { conservative: 0.6, aggressive: 0.5 },
   ruleBasedScores,
-  scoreThreshold = { conservative: 60, aggressive: 75 },
+  scoreThreshold = { conservative: 60, aggressive: 45 },  // V2: 75→45 (risk filter only)
   isJapan = false,
 }: JudgmentPanelProps) {
   const [filter, setFilter] = useState<'all' | 'buy' | 'hold' | 'avoid'>('all');
   const [sortBy, setSortBy] = useState<'confidence' | 'score'>('confidence');
 
-  // Default max picks (NORMAL regime)
-  const maxPicks = { conservative: 5, aggressive: 3 };
+  // Default max picks (NORMAL regime) - V2: 3→5
+  const maxPicks = { conservative: 5, aggressive: 5 };
 
   if (!judgments || judgments.length === 0) {
     return (
@@ -834,28 +833,42 @@ export function JudgmentPanel({
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">{title}</h3>
 
-        {/* Pipeline Flow */}
+        {/* Pipeline Flow - New LLM-first selection logic */}
         <div className="bg-gray-50 rounded-lg p-4 mb-6">
+          <p className="text-xs text-gray-500 mb-3">選択フロー（LLM信頼度優先）</p>
           <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <div className="text-center px-3">
+            <div className="flex items-center gap-1 flex-wrap">
+              <div className="text-center px-2 py-1 bg-white rounded shadow-sm">
                 <p className="text-lg font-bold text-gray-700">{stats.total}</p>
-                <p className="text-xs text-gray-500">LLM評価</p>
+                <p className="text-xs text-gray-500">閾値通過</p>
               </div>
               <span className="text-gray-400">→</span>
-              <div className="text-center px-3">
+              <div className="text-center px-2 py-1 bg-white rounded shadow-sm">
                 <p className="text-lg font-bold text-green-600">{stats.buy}</p>
-                <p className="text-xs text-gray-500">BUY判定</p>
+                <p className="text-xs text-gray-500">LLM BUY</p>
               </div>
               <span className="text-gray-400">→</span>
-              <div className="text-center px-3">
+              <div className="text-center px-2 py-1 bg-white rounded shadow-sm">
+                <p className="text-lg font-bold text-purple-600">
+                  {judgments.filter(j => j.decision === 'buy' && j.confidence >= (
+                    (j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative')
+                      ? confidenceThreshold.conservative
+                      : confidenceThreshold.aggressive
+                  )).length}
+                </p>
+                <p className="text-xs text-gray-500">信頼度OK</p>
+              </div>
+              <span className="text-gray-400">→</span>
+              <div className="text-center px-2 py-1 bg-blue-50 rounded shadow-sm border border-blue-200">
                 <p className="text-lg font-bold text-blue-600">{stats.finalPicks}</p>
-                <p className="text-xs text-gray-500">最終採用</p>
+                <p className="text-xs text-blue-600">最終採用</p>
               </div>
             </div>
-            <div className="text-right text-xs text-gray-500">
-              <p>信頼度閾値: V1≥{(confidenceThreshold.conservative * 100).toFixed(0)}% / V2≥{(confidenceThreshold.aggressive * 100).toFixed(0)}%</p>
-            </div>
+          </div>
+          <div className="mt-3 text-xs text-gray-500 space-y-1">
+            <p>• ルールスコア閾値: V1≥{scoreThreshold.conservative}点 / V2≥{scoreThreshold.aggressive}点（リスクフィルター）</p>
+            <p>• 信頼度閾値: V1≥{(confidenceThreshold.conservative * 100).toFixed(0)}% / V2≥{(confidenceThreshold.aggressive * 100).toFixed(0)}%</p>
+            <p>• 採用順: LLM信頼度の高い順（ルールスコア順位ではない）</p>
           </div>
         </div>
 

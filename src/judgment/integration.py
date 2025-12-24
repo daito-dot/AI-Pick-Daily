@@ -232,21 +232,25 @@ def run_judgment_for_candidates(
     strategy_mode: str,
     market_regime: str,
     batch_date: str,
-    top_n: int = 10,
+    top_n: int | None = None,  # None = judge all candidates
     yfinance: "YFinanceClient | None" = None,
 ) -> list[JudgmentOutput]:
     """
-    Run LLM judgment for top candidates.
+    Run LLM judgment for candidates that passed rule-based threshold.
+
+    Note: With the new LLM-first selection logic, all threshold-passed
+    candidates should be judged. The top_n limit is kept for backward
+    compatibility but should be set to None for new logic.
 
     Args:
         judgment_service: JudgmentService instance
         finnhub: Finnhub client for news (can be None for JP stocks)
         supabase: Supabase client for persistence
-        candidates: List of (stock_data, scored_stock) tuples, sorted by score
+        candidates: List of (stock_data, scored_stock) tuples that passed threshold
         strategy_mode: 'conservative' or 'aggressive'
         market_regime: Current market regime
         batch_date: Date string
-        top_n: Number of top candidates to judge
+        top_n: Max candidates to judge (None = all candidates, for LLM-first selection)
         yfinance: Optional yfinance client for news fallback (used for JP stocks)
 
     Returns:
@@ -254,12 +258,16 @@ def run_judgment_for_candidates(
     """
     judgments = []
 
-    # Only judge top N candidates (LLM is expensive)
-    top_candidates = candidates[:top_n]
+    # Apply top_n limit only if specified (backward compatibility)
+    # For LLM-first selection, pass top_n=None to judge all candidates
+    if top_n is not None:
+        target_candidates = candidates[:top_n]
+    else:
+        target_candidates = candidates
 
-    logger.info(f"Running LLM judgment for top {len(top_candidates)} {strategy_mode} candidates")
+    logger.info(f"Running LLM judgment for {len(target_candidates)} {strategy_mode} candidates")
 
-    for stock_data, score in top_candidates:
+    for stock_data, score in target_candidates:
         symbol = stock_data.symbol
 
         try:
@@ -301,9 +309,12 @@ def filter_picks_by_judgment(
     min_confidence: float = 0.6,
 ) -> list[str]:
     """
-    Filter rule-based picks using LLM judgment.
+    Filter rule-based picks using LLM judgment (legacy method).
 
-    Only include picks where LLM judgment agrees and has sufficient confidence.
+    DEPRECATED: Use select_picks_with_llm() from composite_v2.py for new logic.
+
+    Note: This function is kept for backward compatibility. The new LLM-first
+    selection logic should use select_picks_with_llm() instead.
 
     Args:
         rule_based_picks: Original picks from rule-based scoring
@@ -320,9 +331,9 @@ def filter_picks_by_judgment(
         judgment = judgment_map.get(symbol)
 
         if judgment is None:
-            # No judgment available - include with caution
-            logger.warning(f"{symbol}: No LLM judgment, including based on rule-based score")
-            filtered.append(symbol)
+            # NEW BEHAVIOR: No LLM judgment = exclude from picks
+            # This ensures all picks have been validated by LLM
+            logger.info(f"{symbol}: No LLM judgment available, excluding from picks")
             continue
 
         if judgment.decision == "buy" and judgment.confidence >= min_confidence:
@@ -339,6 +350,43 @@ def filter_picks_by_judgment(
             )
 
     return filtered
+
+
+def select_final_picks(
+    scores: list,  # list[DualCompositeScore]
+    judgments: list[JudgmentOutput],
+    max_picks: int,
+    min_rule_score: int,
+    min_confidence: float = 0.5,
+) -> list[str]:
+    """
+    Select final picks using LLM-first selection logic.
+
+    This is the new selection logic where:
+    1. Rule score is only a risk filter (pass/fail)
+    2. LLM decision and confidence drive selection
+    3. Sorting is by LLM confidence, not rule score
+
+    Args:
+        scores: Rule-based DualCompositeScore list
+        judgments: LLM JudgmentOutput list
+        max_picks: Maximum picks to return
+        min_rule_score: Minimum rule score (risk filter)
+        min_confidence: Minimum LLM confidence
+
+    Returns:
+        List of selected symbols
+    """
+    # Import here to avoid circular dependency
+    from src.scoring.composite_v2 import select_picks_with_llm
+
+    return select_picks_with_llm(
+        scores=scores,
+        llm_judgments=judgments,
+        max_picks=max_picks,
+        min_rule_score=min_rule_score,
+        min_confidence=min_confidence,
+    )
 
 
 def _calculate_rsi(prices: list[float], period: int = 14) -> float:

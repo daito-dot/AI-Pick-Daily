@@ -34,7 +34,9 @@ from src.judgment import (
     JudgmentService,
     run_judgment_for_candidates,
     filter_picks_by_judgment,
+    select_final_picks,
 )
+from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
 from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
 
@@ -512,23 +514,31 @@ def main():
                 )
                 judgment_service = JudgmentService()
 
-                # Build V1 candidates
+                # Get thresholds (use dynamic or fall back to config)
+                v1_min_score = v1_threshold if v1_threshold is not None else config.strategy.v1_min_score
+                v2_min_score = v2_threshold if v2_threshold is not None else config.strategy.v2_min_score
+
+                # NEW LOGIC: Filter candidates by threshold (pass/fail) instead of top_n
+                v1_passed_symbols = get_threshold_passed_symbols(dual_result.v1_scores, v1_min_score)
+                v2_passed_symbols = get_threshold_passed_symbols(dual_result.v2_scores, v2_min_score)
+
+                logger.info(f"V1 threshold-passed candidates: {len(v1_passed_symbols)}")
+                logger.info(f"V2 threshold-passed candidates: {len(v2_passed_symbols)}")
+
+                # Build candidate lists for threshold-passed stocks only
                 v1_candidates = []
                 v1_score_map = {s.symbol: s for s in dual_result.v1_scores}
                 for stock_data in v1_stocks_data:
-                    if stock_data.symbol in v1_score_map:
+                    if stock_data.symbol in v1_passed_symbols:
                         v1_candidates.append((stock_data, v1_score_map[stock_data.symbol]))
-                v1_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
 
-                # Build V2 candidates
                 v2_candidates = []
                 v2_score_map = {s.symbol: s for s in dual_result.v2_scores}
                 for stock_data in v2_stocks_data:
-                    if stock_data.symbol in v2_score_map:
+                    if stock_data.symbol in v2_passed_symbols:
                         v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
-                v2_candidates.sort(key=lambda x: x[1].composite_score, reverse=True)
 
-                # Run V1 Conservative judgments (use yfinance for news)
+                # Run V1 Conservative judgments (judge ALL threshold-passed candidates)
                 v1_judgments = run_judgment_for_candidates(
                     judgment_service=judgment_service,
                     finnhub=None,  # No Finnhub for JP stocks
@@ -537,17 +547,20 @@ def main():
                     strategy_mode="jp_conservative",
                     market_regime=regime,
                     batch_date=today,
-                    top_n=10,
+                    top_n=None,  # Judge all threshold-passed candidates
                     yfinance=yf_client,  # Use yfinance for news
                 )
 
-                v1_final_picks = filter_picks_by_judgment(
-                    rule_based_picks=dual_result.v1_picks,
+                # NEW: Use LLM-first selection (sort by confidence, not rule score)
+                v1_final_picks = select_final_picks(
+                    scores=dual_result.v1_scores,
                     judgments=v1_judgments,
-                    min_confidence=0.6,
+                    max_picks=market_regime.max_picks,  # V1 respects regime
+                    min_rule_score=v1_min_score,
+                    min_confidence=0.6,  # Conservative requires 60% confidence
                 )
 
-                # Run V2 Aggressive judgments (use yfinance for news)
+                # Run V2 Aggressive judgments (judge ALL threshold-passed candidates)
                 v2_judgments = run_judgment_for_candidates(
                     judgment_service=judgment_service,
                     finnhub=None,
@@ -556,22 +569,28 @@ def main():
                     strategy_mode="jp_aggressive",
                     market_regime=regime,
                     batch_date=today,
-                    top_n=10,
+                    top_n=None,  # Judge all threshold-passed candidates
                     yfinance=yf_client,  # Use yfinance for news
                 )
 
-                v2_final_picks = filter_picks_by_judgment(
-                    rule_based_picks=dual_result.v2_picks,
+                # NEW: Use LLM-first selection (sort by confidence, not rule score)
+                v2_max_picks = config.strategy.v2_max_picks if market_regime.max_picks > 0 else 0
+                v2_final_picks = select_final_picks(
+                    scores=dual_result.v2_scores,
                     judgments=v2_judgments,
-                    min_confidence=0.5,
+                    max_picks=v2_max_picks,
+                    min_rule_score=v2_min_score,
+                    min_confidence=0.5,  # Aggressive allows 50% confidence
                 )
 
                 logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
                 logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
 
+                # Track judgment results
+                total_candidates = len(v1_candidates) + len(v2_candidates)
                 judgment_ctx.successful_items = len(v1_judgments) + len(v2_judgments)
-                judgment_ctx.total_items = 20
-                judgment_ctx.failed_items = 20 - judgment_ctx.successful_items
+                judgment_ctx.total_items = total_candidates
+                judgment_ctx.failed_items = total_candidates - judgment_ctx.successful_items
                 BatchLogger.finish(judgment_ctx)
 
             except Exception as e:

@@ -253,7 +253,8 @@ class CatalystAgent:
         reasons = []
 
         # 1. Earnings Surprise (40 points max)
-        earnings_score = 0
+        # Neutral score (15) when no data - don't penalize missing data
+        earnings_score = 15  # Neutral default
         if data.earnings_surprise_pct is not None:
             surprise = data.earnings_surprise_pct
             if surprise > 20:
@@ -265,16 +266,17 @@ class CatalystAgent:
             elif surprise > 5:
                 earnings_score = 20
             elif surprise > 0:
-                earnings_score = 10
+                earnings_score = 15
             else:
-                earnings_score = 0
+                earnings_score = 5
                 if surprise < -10:
                     reasons.append(f"Earnings miss {surprise:.0f}%")
 
         components["earnings_surprise"] = earnings_score
 
         # 2. Analyst Revisions (30 points max)
-        revision_score = 0
+        # Neutral score (10) when no data
+        revision_score = 10  # Neutral default
         if data.analyst_revision_score is not None:
             rev = data.analyst_revision_score
             if rev > 10:
@@ -283,12 +285,15 @@ class CatalystAgent:
             elif rev > 5:
                 revision_score = 20
             elif rev > 0:
-                revision_score = 10
+                revision_score = 15
+            elif rev < -5:
+                revision_score = 5
 
         components["analyst_revision"] = revision_score
 
         # 3. Gap Up / News Reaction (30 points max)
-        gap_score = 0
+        # Neutral score (10) when no data
+        gap_score = 10  # Neutral default
         if data.gap_pct is not None:
             gap = data.gap_pct
             if gap > 10:
@@ -300,7 +305,7 @@ class CatalystAgent:
             elif gap > 3:
                 gap_score = 15
             elif gap < -5:
-                gap_score = 0
+                gap_score = 5
                 reasons.append(f"Gap down {gap:.0f}%")
 
         components["gap_reaction"] = gap_score

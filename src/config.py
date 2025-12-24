@@ -42,9 +42,9 @@ class StrategyConfig:
     v1_max_picks: int = 5
     v1_min_score: int = 60
 
-    # V2 settings
-    v2_max_picks: int = 3
-    v2_min_score: int = 75
+    # V2 settings (Aggressive: lower threshold, more picks for growth potential)
+    v2_max_picks: int = 5
+    v2_min_score: int = 45  # Low threshold - risk filter only, LLM decides adoption
     v2_trailing_stop_pct: float = 0.08  # 8%
 
 
