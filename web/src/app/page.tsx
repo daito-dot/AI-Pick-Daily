@@ -244,6 +244,18 @@ function MarketContent({
               conservative: conservativePicks,
               aggressive: aggressivePicks,
             }}
+            ruleBasedScores={{
+              conservative: conservativeScores.map(s => ({
+                symbol: s.symbol,
+                composite_score: s.composite_score,
+                percentile_rank: s.percentile_rank,
+              })),
+              aggressive: aggressiveScores.map(s => ({
+                symbol: s.symbol,
+                composite_score: s.composite_score,
+                percentile_rank: s.percentile_rank,
+              })),
+            }}
           />
         </div>
       )}

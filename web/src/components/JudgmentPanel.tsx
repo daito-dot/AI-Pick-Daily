@@ -43,6 +43,12 @@ function parseReasoning(value: JudgmentRecord['reasoning'] | string | null | und
   return safeParseJson(value, null);
 }
 
+interface RuleBasedScore {
+  symbol: string;
+  composite_score: number;
+  percentile_rank: number;
+}
+
 interface JudgmentPanelProps {
   judgments: JudgmentRecord[];
   title?: string;
@@ -51,6 +57,14 @@ interface JudgmentPanelProps {
     aggressive: string[];
   };
   confidenceThreshold?: {
+    conservative: number;
+    aggressive: number;
+  };
+  ruleBasedScores?: {
+    conservative: RuleBasedScore[];
+    aggressive: RuleBasedScore[];
+  };
+  scoreThreshold?: {
     conservative: number;
     aggressive: number;
   };
@@ -233,9 +247,13 @@ interface JudgmentCardProps {
   judgment: JudgmentRecord;
   isFinalPick?: boolean;
   confidenceThreshold?: number;
+  ruleBasedScore?: RuleBasedScore;
+  scoreThreshold?: number;
+  ruleBasedRank?: number;
+  maxPicks?: number;
 }
 
-function JudgmentCard({ judgment, isFinalPick, confidenceThreshold }: JudgmentCardProps) {
+function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedScore, scoreThreshold, ruleBasedRank, maxPicks }: JudgmentCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
   // Parse JSON fields that might be stored as strings (legacy data)
@@ -245,15 +263,21 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold }: JudgmentCa
 
   // Determine filter status
   const isV1 = judgment.strategy_mode === 'conservative' || judgment.strategy_mode === 'jp_conservative';
-  const threshold = confidenceThreshold ?? (isV1 ? 0.6 : 0.5);
+  const confThreshold = confidenceThreshold ?? (isV1 ? 0.6 : 0.5);
   const passedLLM = judgment.decision === 'buy';
-  const passedConfidence = judgment.confidence >= threshold;
+  const passedConfidence = judgment.confidence >= confThreshold;
+  const ruleScore = ruleBasedScore?.composite_score ?? 0;
+  const scoreThresh = scoreThreshold ?? (isV1 ? 60 : 75);
+  const passedScoreThreshold = ruleScore >= scoreThresh;
+  const passedMaxPicks = ruleBasedRank !== undefined && maxPicks !== undefined ? ruleBasedRank <= maxPicks : false;
 
   // Get filter status message
   const getFilterStatus = () => {
     if (isFinalPick) return { text: '最終ピック採用', color: 'text-green-600', icon: '✓' };
     if (!passedLLM) return { text: `LLM: ${judgment.decision.toUpperCase()}`, color: 'text-gray-500', icon: '−' };
-    if (!passedConfidence) return { text: `信頼度不足 (${(threshold * 100).toFixed(0)}%未満)`, color: 'text-orange-500', icon: '!' };
+    if (!passedConfidence) return { text: `信頼度不足 (${(confThreshold * 100).toFixed(0)}%未満)`, color: 'text-orange-500', icon: '!' };
+    if (!passedScoreThreshold) return { text: `スコア不足 (${scoreThresh}点未満)`, color: 'text-orange-500', icon: '!' };
+    if (!passedMaxPicks && ruleBasedRank !== undefined) return { text: `順位外 (${ruleBasedRank}位/${maxPicks}枠)`, color: 'text-gray-400', icon: '−' };
     return { text: 'ルールベース対象外', color: 'text-gray-400', icon: '−' };
   };
   const filterStatus = getFilterStatus();
@@ -295,15 +319,42 @@ function JudgmentCard({ judgment, isFinalPick, confidenceThreshold }: JudgmentCa
         <ConfidenceBar confidence={judgment.confidence} />
       </div>
 
-      {/* Score */}
-      <div className="flex items-center justify-between text-sm mb-3">
-        <span className="text-gray-600">スコア</span>
-        <span className={`font-bold ${
-          judgment.score >= 75 ? 'text-green-600' :
-          judgment.score >= 60 ? 'text-yellow-600' : 'text-red-600'
-        }`}>
-          {judgment.score}点
-        </span>
+      {/* Scores - Both Rule-based and LLM */}
+      <div className="bg-gray-50 rounded p-2 mb-3">
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          {/* Rule-based Score */}
+          <div className="text-center">
+            <div className="text-xs text-gray-500 mb-1">ルールスコア</div>
+            <div className="flex items-center justify-center gap-1">
+              <span className={`font-bold ${
+                ruleScore >= scoreThresh ? 'text-green-600' : 'text-orange-500'
+              }`}>
+                {ruleScore > 0 ? `${ruleScore}点` : '-'}
+              </span>
+              {ruleBasedRank !== undefined && (
+                <span className="text-xs text-gray-400">
+                  ({ruleBasedRank}位)
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-gray-400">
+              閾値: {scoreThresh}点
+            </div>
+          </div>
+          {/* LLM Score */}
+          <div className="text-center">
+            <div className="text-xs text-gray-500 mb-1">LLMスコア</div>
+            <span className={`font-bold ${
+              judgment.score >= 75 ? 'text-green-600' :
+              judgment.score >= 60 ? 'text-yellow-600' : 'text-red-600'
+            }`}>
+              {judgment.score}点
+            </span>
+            <div className="text-xs text-gray-400">
+              参考値
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Key Factors (collapsed by default) */}
@@ -354,9 +405,14 @@ export function JudgmentPanel({
   title = 'LLM判断 (Layer 2)',
   finalPicks,
   confidenceThreshold = { conservative: 0.6, aggressive: 0.5 },
+  ruleBasedScores,
+  scoreThreshold = { conservative: 60, aggressive: 75 },
 }: JudgmentPanelProps) {
   const [filter, setFilter] = useState<'all' | 'buy' | 'hold' | 'avoid'>('all');
   const [sortBy, setSortBy] = useState<'confidence' | 'score'>('confidence');
+
+  // Default max picks (NORMAL regime)
+  const maxPicks = { conservative: 5, aggressive: 3 };
 
   if (!judgments || judgments.length === 0) {
     return (
@@ -377,10 +433,41 @@ export function JudgmentPanel({
     return picks.includes(j.symbol);
   };
 
-  // Helper to get threshold for a judgment
-  const getThreshold = (j: JudgmentRecord) => {
+  // Helper to get confidence threshold for a judgment
+  const getConfThreshold = (j: JudgmentRecord) => {
     const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
     return isV1 ? confidenceThreshold.conservative : confidenceThreshold.aggressive;
+  };
+
+  // Helper to get rule-based score for a judgment
+  const getRuleBasedScore = (j: JudgmentRecord): RuleBasedScore | undefined => {
+    if (!ruleBasedScores) return undefined;
+    const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
+    const scores = isV1 ? ruleBasedScores.conservative : ruleBasedScores.aggressive;
+    return scores.find(s => s.symbol === j.symbol);
+  };
+
+  // Helper to get rule-based rank for a judgment
+  const getRuleBasedRank = (j: JudgmentRecord): number | undefined => {
+    if (!ruleBasedScores) return undefined;
+    const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
+    const scores = isV1 ? ruleBasedScores.conservative : ruleBasedScores.aggressive;
+    // Sort by composite_score descending
+    const sorted = [...scores].sort((a, b) => b.composite_score - a.composite_score);
+    const idx = sorted.findIndex(s => s.symbol === j.symbol);
+    return idx >= 0 ? idx + 1 : undefined;
+  };
+
+  // Helper to get score threshold for a judgment
+  const getScoreThreshold = (j: JudgmentRecord) => {
+    const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
+    return isV1 ? scoreThreshold.conservative : scoreThreshold.aggressive;
+  };
+
+  // Helper to get max picks for a judgment
+  const getMaxPicks = (j: JudgmentRecord) => {
+    const isV1 = j.strategy_mode === 'conservative' || j.strategy_mode === 'jp_conservative';
+    return isV1 ? maxPicks.conservative : maxPicks.aggressive;
   };
 
   // Filter and sort
@@ -496,7 +583,11 @@ export function JudgmentPanel({
             key={judgment.id}
             judgment={judgment}
             isFinalPick={isFinalPick(judgment)}
-            confidenceThreshold={getThreshold(judgment)}
+            confidenceThreshold={getConfThreshold(judgment)}
+            ruleBasedScore={getRuleBasedScore(judgment)}
+            scoreThreshold={getScoreThreshold(judgment)}
+            ruleBasedRank={getRuleBasedRank(judgment)}
+            maxPicks={getMaxPicks(judgment)}
           />
         ))}
       </div>
