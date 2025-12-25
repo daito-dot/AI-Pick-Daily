@@ -1,55 +1,12 @@
 'use client';
 
-import type { SystemStatus, BatchExecutionLog, ExecutionStatus } from '@/types';
+import type { SystemStatus, BatchExecutionLog } from '@/types';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
+import { StatusBadge, StatusIcon } from './shared';
 
 interface SystemStatusPanelProps {
   status: SystemStatus;
-}
-
-function StatusIcon({ status }: { status: ExecutionStatus | null }) {
-  if (!status) {
-    return <span className="text-gray-400">-</span>;
-  }
-
-  switch (status) {
-    case 'success':
-      return <span className="text-green-500">&#x2713;</span>;
-    case 'partial_success':
-      return <span className="text-yellow-500">&#x26A0;</span>;
-    case 'failed':
-      return <span className="text-red-500">&#x2717;</span>;
-    case 'running':
-      return <span className="text-blue-500 animate-pulse">&#x25CF;</span>;
-    default:
-      return <span className="text-gray-400">-</span>;
-  }
-}
-
-function StatusBadge({ status }: { status: ExecutionStatus | null }) {
-  if (!status) {
-    return (
-      <span className="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">
-        未実行
-      </span>
-    );
-  }
-
-  const config = {
-    success: { bg: 'bg-green-100', text: 'text-green-700', label: '成功' },
-    partial_success: { bg: 'bg-yellow-100', text: 'text-yellow-700', label: '一部失敗' },
-    failed: { bg: 'bg-red-100', text: 'text-red-700', label: '失敗' },
-    running: { bg: 'bg-blue-100', text: 'text-blue-700', label: '実行中' },
-  };
-
-  const c = config[status];
-
-  return (
-    <span className={`px-2 py-0.5 text-xs rounded ${c.bg} ${c.text}`}>
-      {c.label}
-    </span>
-  );
 }
 
 function BatchStatusRow({

@@ -12,6 +12,7 @@ interface StockCardProps {
   sentimentScore: number;
   reasoning: string;
   priceAtTime: number;
+  isJapan?: boolean;
 }
 
 function ScoreBar({ label, score, color }: { label: string; score: number; color: string }) {
@@ -39,6 +40,7 @@ export function StockCard({
   sentimentScore,
   reasoning,
   priceAtTime,
+  isJapan = false,
 }: StockCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -49,6 +51,10 @@ export function StockCard({
   };
 
   const scoreClass = getScoreClass(compositeScore);
+  const currencySymbol = isJapan ? '¥' : '$';
+  const formattedPrice = isJapan
+    ? Math.round(priceAtTime).toLocaleString()
+    : priceAtTime.toFixed(2);
 
   return (
     <div className="card hover:shadow-lg transition-shadow">
@@ -57,7 +63,7 @@ export function StockCard({
         <div>
           <h3 className="text-xl font-bold text-gray-900">{symbol}</h3>
           <p className="text-sm text-gray-500">
-            ${priceAtTime.toFixed(2)}
+            {currencySymbol}{formattedPrice}
           </p>
         </div>
         <div className="text-right">

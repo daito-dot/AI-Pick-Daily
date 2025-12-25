@@ -1,40 +1,24 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { BatchExecutionLog, ExecutionStatus } from '@/types';
+import type { BatchExecutionLog } from '@/types';
 import { getBatchExecutionHistory } from '@/lib/supabase';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ja } from 'date-fns/locale';
+import { StatusBadge } from './shared';
 
 interface ExecutionHistoryProps {
   initialData?: BatchExecutionLog[];
 }
 
-function StatusBadge({ status }: { status: ExecutionStatus }) {
-  const config = {
-    success: { bg: 'bg-green-100', text: 'text-green-700', label: '成功' },
-    partial_success: { bg: 'bg-yellow-100', text: 'text-yellow-700', label: '一部失敗' },
-    failed: { bg: 'bg-red-100', text: 'text-red-700', label: '失敗' },
-    running: { bg: 'bg-blue-100', text: 'text-blue-700', label: '実行中' },
-  };
-
-  const c = config[status] || config.running;
-
-  return (
-    <span className={`px-2 py-0.5 text-xs rounded ${c.bg} ${c.text}`}>
-      {c.label}
-    </span>
-  );
-}
-
 function BatchTypeLabel({ batchType }: { batchType: string }) {
   const labels: Record<string, { label: string; market: string }> = {
-    'morning_scoring': { label: 'Post-Market Scoring', market: 'US' },
-    'evening_review': { label: 'Pre-Market Review', market: 'US' },
+    'morning_scoring': { label: 'Post-Market Scoring', market: '🇺🇸 米国株' },
+    'evening_review': { label: 'Pre-Market Review', market: '🇺🇸 米国株' },
     'llm_judgment': { label: 'LLM Judgment', market: '' },
     'weekly_research': { label: 'Weekly Research', market: '' },
-    'morning_scoring_jp': { label: 'Post-Market Scoring', market: 'JP' },
-    'evening_review_jp': { label: 'Pre-Market Review', market: 'JP' },
+    'morning_scoring_jp': { label: 'Post-Market Scoring', market: '🇯🇵 日本株' },
+    'evening_review_jp': { label: 'Pre-Market Review', market: '🇯🇵 日本株' },
   };
 
   const info = labels[batchType] || { label: batchType, market: '' };
@@ -43,9 +27,9 @@ function BatchTypeLabel({ batchType }: { batchType: string }) {
     <div className="flex items-center gap-2">
       {info.market && (
         <span className={`text-xs px-1.5 py-0.5 rounded ${
-          info.market === 'JP' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
+          info.market.includes('日本株') ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
         }`}>
-          {info.market === 'JP' ? '🇯🇵' : '🇺🇸'}
+          {info.market}
         </span>
       )}
       <span className="text-sm font-medium text-gray-700">{info.label}</span>
@@ -58,7 +42,7 @@ function ExecutionRow({ log }: { log: BatchExecutionLog }) {
     if (!isoString) return '-';
     try {
       const date = new Date(isoString);
-      return format(date, 'MM/dd HH:mm', { locale: ja });
+      return format(date, 'M月d日 HH:mm', { locale: ja });
     } catch {
       return '-';
     }
@@ -117,10 +101,10 @@ function ExecutionRow({ log }: { log: BatchExecutionLog }) {
 
 function ScheduleTable() {
   const schedules = [
-    { market: '🇺🇸 US', type: 'Post-Market Scoring', time: '07:00 JST', utc: '22:00 UTC' },
-    { market: '🇺🇸 US', type: 'Pre-Market Review', time: '06:00 JST', utc: '21:00 UTC' },
-    { market: '🇯🇵 JP', type: 'Post-Market Scoring', time: '16:00 JST', utc: '07:00 UTC' },
-    { market: '🇯🇵 JP', type: 'Pre-Market Review', time: '08:00 JST', utc: '23:00 UTC' },
+    { market: '🇺🇸 米国株', type: 'Post-Market Scoring', time: '07:00 JST', utc: '22:00 UTC' },
+    { market: '🇺🇸 米国株', type: 'Pre-Market Review', time: '06:00 JST', utc: '21:00 UTC' },
+    { market: '🇯🇵 日本株', type: 'Post-Market Scoring', time: '16:00 JST', utc: '07:00 UTC' },
+    { market: '🇯🇵 日本株', type: 'Pre-Market Review', time: '08:00 JST', utc: '23:00 UTC' },
   ];
 
   return (
@@ -225,7 +209,7 @@ export function ExecutionHistory({ initialData }: ExecutionHistoryProps) {
           {sortedDates.map(date => (
             <div key={date}>
               <p className="text-xs font-medium text-gray-500 mb-1 sticky top-0 bg-gray-50 py-1">
-                {format(new Date(date), 'MM月dd日 (E)', { locale: ja })}
+                {format(new Date(date), 'M月d日 (E)', { locale: ja })}
               </p>
               <div className="space-y-0">
                 {groupedLogs[date].map(log => (
