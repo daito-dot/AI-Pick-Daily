@@ -148,31 +148,25 @@ DROP VIEW IF EXISTS public.cumulative_performance;
 CREATE VIEW public.cumulative_performance
 WITH (security_invoker = true)
 AS
+WITH daily_returns AS (
+    SELECT
+        pick_date,
+        strategy_mode,
+        AVG(return_pct_5d) as daily_return
+    FROM public.performance_log
+    WHERE status_5d != 'pending'
+    GROUP BY pick_date, strategy_mode
+)
 SELECT
-    p.recorded_date,
-    p.strategy_mode,
-    p.symbol,
-    p.entry_price,
-    p.target_return,
-    p.actual_return,
-    p.is_successful,
-    SUM(COALESCE(p.actual_return, 0)) OVER (
-        PARTITION BY p.strategy_mode
-        ORDER BY p.recorded_date
-        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS cumulative_return,
-    COUNT(*) OVER (
-        PARTITION BY p.strategy_mode
-        ORDER BY p.recorded_date
-        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS total_picks,
-    SUM(CASE WHEN p.is_successful THEN 1 ELSE 0 END) OVER (
-        PARTITION BY p.strategy_mode
-        ORDER BY p.recorded_date
-        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS successful_picks
-FROM public.performance_log p
-WHERE p.actual_return IS NOT NULL;
+    strategy_mode,
+    pick_date,
+    daily_return,
+    SUM(daily_return) OVER (
+        PARTITION BY strategy_mode
+        ORDER BY pick_date
+    ) as cumulative_return
+FROM daily_returns
+ORDER BY strategy_mode, pick_date;
 
 -- Drop and recreate strategy_comparison view
 DROP VIEW IF EXISTS public.strategy_comparison;
@@ -181,20 +175,17 @@ CREATE VIEW public.strategy_comparison
 WITH (security_invoker = true)
 AS
 SELECT
-    strategy_mode,
-    COUNT(*) AS total_picks,
-    COUNT(CASE WHEN actual_return IS NOT NULL THEN 1 END) AS evaluated_picks,
-    ROUND(AVG(CASE WHEN actual_return IS NOT NULL THEN actual_return END)::numeric, 4) AS avg_return,
-    ROUND(
-        (SUM(CASE WHEN is_successful THEN 1 ELSE 0 END)::numeric /
-         NULLIF(COUNT(CASE WHEN actual_return IS NOT NULL THEN 1 END), 0) * 100)::numeric,
-        2
-    ) AS success_rate,
-    ROUND(SUM(COALESCE(actual_return, 0))::numeric, 4) AS total_return,
-    MIN(recorded_date) AS first_pick_date,
-    MAX(recorded_date) AS last_pick_date
-FROM public.performance_log
-GROUP BY strategy_mode;
+    pl.pick_date,
+    pl.strategy_mode,
+    COUNT(*) as pick_count,
+    AVG(pl.return_pct_1d) as avg_return_1d,
+    AVG(pl.return_pct_5d) as avg_return_5d,
+    SUM(CASE WHEN pl.status_5d = 'win' THEN 1 ELSE 0 END)::FLOAT /
+        NULLIF(SUM(CASE WHEN pl.status_5d != 'pending' THEN 1 ELSE 0 END), 0) * 100 as win_rate_5d
+FROM public.performance_log pl
+WHERE pl.status_5d != 'pending'
+GROUP BY pl.pick_date, pl.strategy_mode
+ORDER BY pl.pick_date DESC, pl.strategy_mode;
 
 -- Grant SELECT on views
 GRANT SELECT ON public.cumulative_performance TO anon, authenticated;
