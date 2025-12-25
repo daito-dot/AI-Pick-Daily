@@ -1,10 +1,11 @@
-import { getTodayPicks, getTodayJudgments, getTodayBatchStatus } from '@/lib/supabase';
+import { getTodayPicks, getTodayJudgments, getTodayBatchStatus, getBatchExecutionHistory } from '@/lib/supabase';
 import type { MarketType } from '@/lib/supabase';
 import { getStockDisplayName } from '@/lib/jp-stocks';
 import { MarketTabs } from '@/components/MarketTabs';
 import { MarketRegimeStatus } from '@/components/MarketRegimeStatus';
 import { JudgmentPanel } from '@/components/JudgmentPanel';
 import { SystemStatusPanel } from '@/components/SystemStatus';
+import { ExecutionHistory } from '@/components/ExecutionHistory';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import type { StockScore, StrategyModeType, MarketRegimeHistory, JudgmentRecord } from '@/types';
@@ -334,12 +335,13 @@ function MarketContent({
 
 export default async function HomePage() {
   // Fetch data for both US and Japan markets in parallel
-  const [usPicksData, jpPicksData, usJudgments, jpJudgments, batchStatus] = await Promise.all([
+  const [usPicksData, jpPicksData, usJudgments, jpJudgments, batchStatus, executionHistory] = await Promise.all([
     getTodayPicks('us'),
     getTodayPicks('jp'),
     getTodayJudgments('us'),
     getTodayJudgments('jp'),
     getTodayBatchStatus(),
+    getBatchExecutionHistory(7),
   ]);
 
   const today = format(new Date(), 'yyyy年MM月dd日 (E)', { locale: ja });
@@ -387,9 +389,10 @@ export default async function HomePage() {
       {/* Market Tabs */}
       <MarketTabs usContent={usContent} jpContent={jpContent} />
 
-      {/* System Status Panel */}
-      <div className="mt-8">
+      {/* System Status and Execution History */}
+      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <SystemStatusPanel status={batchStatus} />
+        <ExecutionHistory initialData={executionHistory} />
       </div>
     </div>
   );

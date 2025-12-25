@@ -128,13 +128,13 @@ function ScheduleInfo() {
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="bg-white rounded p-2">
           <p className="font-medium text-gray-700 mb-1">🇺🇸 米国株</p>
-          <p className="text-gray-600">スコアリング: <span className="font-medium">07:00</span></p>
-          <p className="text-gray-600">レビュー: <span className="font-medium">06:00</span></p>
+          <p className="text-gray-600">Post-Market: <span className="font-medium">07:00</span></p>
+          <p className="text-gray-600">Pre-Market: <span className="font-medium">06:00</span></p>
         </div>
         <div className="bg-white rounded p-2">
           <p className="font-medium text-gray-700 mb-1">🇯🇵 日本株</p>
-          <p className="text-gray-600">スコアリング: <span className="font-medium">16:00</span></p>
-          <p className="text-gray-600">レビュー: <span className="font-medium">08:00</span></p>
+          <p className="text-gray-600">Post-Market: <span className="font-medium">16:00</span></p>
+          <p className="text-gray-600">Pre-Market: <span className="font-medium">08:00</span></p>
         </div>
       </div>
     </div>
