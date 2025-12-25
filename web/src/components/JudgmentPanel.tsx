@@ -690,7 +690,6 @@ interface JudgmentCardProps {
 
 // Memoized JudgmentCard component
 const JudgmentCard = memo(function JudgmentCard({ judgment, isFinalPick, confidenceThreshold, ruleBasedScore, scoreThreshold, ruleBasedRank, maxPicks, isJapan = false }: JudgmentCardProps) {
-  const [showDetails, setShowDetails] = useState(false);
   const [showModal, setShowModal] = useState(false);
 
   // Parse JSON fields that might be stored as strings (legacy data)
@@ -805,45 +804,10 @@ const JudgmentCard = memo(function JudgmentCard({ judgment, isFinalPick, confide
         </div>
       </div>
 
-      {/* Key Factors (collapsed by default) */}
-      <button
-        onClick={() => setShowDetails(!showDetails)}
-        className="w-full text-left text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1"
-      >
-        <span>{showDetails ? '▼' : '▶'}</span>
-        <span>詳細分析 ({keyFactors.length}ファクター)</span>
-      </button>
-
-      {showDetails && (
-        <div className="mt-3 space-y-3">
-          {/* Key Factors */}
-          <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">重要ファクター:</p>
-            <KeyFactorsList factors={keyFactors} />
-          </div>
-
-          {/* Identified Risks */}
-          {identifiedRisks.length > 0 && (
-            <div>
-              <p className="text-sm font-medium text-red-700 mb-2">識別されたリスク:</p>
-              <ul className="list-disc list-inside text-sm text-red-600 ml-2">
-                {identifiedRisks.map((risk, idx) => (
-                  <li key={idx}>{risk}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Reasoning */}
-          <ReasoningSection reasoning={reasoning} />
-
-          {/* Model Info */}
-          <div className="pt-2 border-t border-gray-100 text-xs text-gray-400">
-            <p>Model: {judgment.model_version}</p>
-            <p>Prompt: v{judgment.prompt_version}</p>
-          </div>
-        </div>
-      )}
+      {/* Click to view details in modal */}
+      <p className="text-xs text-gray-400 text-center">
+        クリックして詳細を表示
+      </p>
     </div>
 
     {/* Stock Detail Modal */}
