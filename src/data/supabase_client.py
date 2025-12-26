@@ -901,6 +901,113 @@ class SupabaseClient:
         result = self._client.table("trade_history").insert(record).execute()
         return result.data[0] if result.data else {}
 
+    def get_symbols_closed_on_date(
+        self,
+        strategy_mode: str,
+        exit_date: str,
+    ) -> list[str]:
+        """
+        Get symbols that were closed (exited) on a specific date.
+
+        Used to prevent same-day re-entry after position closure.
+
+        Args:
+            strategy_mode: 'conservative', 'aggressive', etc.
+            exit_date: Date string in YYYY-MM-DD format
+
+        Returns:
+            List of symbols that were closed on that date
+        """
+        result = (
+            self._client.table("trade_history")
+            .select("symbol")
+            .eq("strategy_mode", strategy_mode)
+            .eq("exit_date", exit_date)
+            .execute()
+        )
+        return [row["symbol"] for row in result.data] if result.data else []
+
+    def get_unreviewed_batch(
+        self,
+        strategy_mode: str,
+    ) -> dict[str, Any] | None:
+        """
+        Get the latest Post-Market batch that hasn't been reviewed yet.
+
+        This links Pre-Market Review to the correct Post-Market Scoring batch
+        instead of using date-based matching.
+
+        Args:
+            strategy_mode: 'conservative', 'aggressive', etc.
+
+        Returns:
+            Batch info dict with id, batch_date, symbols, or None if no unreviewed batch
+        """
+        result = (
+            self._client.table("daily_picks")
+            .select("id, batch_date, symbols, pick_count")
+            .eq("strategy_mode", strategy_mode)
+            .eq("status", "published")
+            .is_("reviewed_at", "null")
+            .order("batch_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def mark_batch_reviewed(
+        self,
+        batch_id: str,
+    ) -> bool:
+        """
+        Mark a Post-Market batch as reviewed by Pre-Market Review.
+
+        Args:
+            batch_id: UUID of the daily_picks record
+
+        Returns:
+            True if successful
+        """
+        from datetime import datetime, timezone
+
+        result = (
+            self._client.table("daily_picks")
+            .update({"reviewed_at": datetime.now(timezone.utc).isoformat()})
+            .eq("id", batch_id)
+            .execute()
+        )
+        return bool(result.data)
+
+    def get_scores_for_batch(
+        self,
+        batch_date: str,
+        strategy_mode: str,
+    ) -> dict[str, int]:
+        """
+        Get scores for a specific batch (date + strategy_mode).
+
+        Returns a dict of symbol -> composite_score for the given batch.
+
+        Args:
+            batch_date: Date string in YYYY-MM-DD format
+            strategy_mode: 'conservative', 'aggressive', etc.
+
+        Returns:
+            Dict mapping symbol to composite_score
+        """
+        result = (
+            self._client.table("stock_scores")
+            .select("symbol, composite_score")
+            .eq("batch_date", batch_date)
+            .eq("strategy_mode", strategy_mode)
+            .execute()
+        )
+        return {
+            row["symbol"]: row["composite_score"]
+            for row in result.data
+            if row.get("composite_score") is not None
+        } if result.data else {}
+
     def get_latest_portfolio_snapshot(
         self,
         strategy_mode: str,

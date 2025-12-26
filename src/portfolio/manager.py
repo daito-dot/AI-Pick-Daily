@@ -482,6 +482,23 @@ class PortfolioManager:
             logger.info(f"All picks already in portfolio for {strategy_mode}")
             return []
 
+        # Filter out symbols that were closed TODAY (prevent same-day re-entry)
+        # This prevents the timing issue where Review closes a position before Scoring
+        # picks the same stock again with potentially stale data
+        today = datetime.now().strftime("%Y-%m-%d")
+        closed_today = set(self.supabase.get_symbols_closed_on_date(strategy_mode, today))
+        if closed_today:
+            before_count = len(new_picks)
+            new_picks = [p for p in new_picks if p not in closed_today]
+            excluded = closed_today & set(picks)
+            if excluded:
+                logger.info(
+                    f"Excluded {len(excluded)} symbols closed today from re-entry: {excluded}"
+                )
+        if not new_picks:
+            logger.info(f"All picks were either held or closed today for {strategy_mode}")
+            return []
+
         # Calculate position size
         position_size = self.calculate_position_size(
             available_cash,
@@ -502,7 +519,6 @@ class PortfolioManager:
             logger.warning(f"No cash or slots available for {strategy_mode}")
             return []
 
-        today = datetime.now().strftime("%Y-%m-%d")
         opened = []
 
         for symbol in new_picks:
