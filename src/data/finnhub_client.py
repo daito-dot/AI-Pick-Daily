@@ -108,6 +108,27 @@ class EarningsEvent:
 
 
 @dataclass
+class EarningsSurprise:
+    """Historical earnings surprise data."""
+    symbol: str
+    period: str  # e.g., "2024-09-30"
+    actual: float
+    estimate: float
+    surprise_pct: float  # (actual - estimate) / |estimate| * 100
+
+
+@dataclass
+class PriceTarget:
+    """Analyst price target data."""
+    symbol: str
+    target_high: float
+    target_low: float
+    target_mean: float
+    target_median: float
+    last_updated: str
+
+
+@dataclass
 class NewsItem:
     """News article data."""
     id: int
@@ -353,3 +374,62 @@ class FinnhubClient:
             StockQuote for SPY (S&P 500 ETF)
         """
         return self.get_quote("SPY")
+
+    @rate_limit_aware(calls_per_minute=60)
+    def get_earnings_surprise(self, symbol: str, limit: int = 4) -> list[EarningsSurprise]:
+        """
+        Get historical earnings surprise data.
+
+        Args:
+            symbol: Stock ticker symbol
+            limit: Number of quarters to fetch (default: 4, max on free tier)
+
+        Returns:
+            List of EarningsSurprise with actual vs estimate EPS
+        """
+        data = self._client.company_earnings(symbol, limit=limit)
+
+        surprises = []
+        for item in data:
+            actual = item.get("actual")
+            estimate = item.get("estimate")
+
+            # Calculate surprise percentage
+            surprise_pct = 0.0
+            if actual is not None and estimate is not None and estimate != 0:
+                surprise_pct = ((actual - estimate) / abs(estimate)) * 100
+
+            surprises.append(EarningsSurprise(
+                symbol=symbol,
+                period=item.get("period", ""),
+                actual=actual or 0.0,
+                estimate=estimate or 0.0,
+                surprise_pct=surprise_pct,
+            ))
+
+        return surprises
+
+    @rate_limit_aware(calls_per_minute=60)
+    def get_price_target(self, symbol: str) -> PriceTarget | None:
+        """
+        Get analyst price target consensus.
+
+        Args:
+            symbol: Stock ticker symbol
+
+        Returns:
+            PriceTarget with analyst consensus, or None if not available
+        """
+        data = self._client.price_target(symbol)
+
+        if not data or not data.get("targetMean"):
+            return None
+
+        return PriceTarget(
+            symbol=symbol,
+            target_high=data.get("targetHigh", 0.0),
+            target_low=data.get("targetLow", 0.0),
+            target_mean=data.get("targetMean", 0.0),
+            target_median=data.get("targetMedian", 0.0),
+            last_updated=data.get("lastUpdated", ""),
+        )

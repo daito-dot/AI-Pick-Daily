@@ -246,6 +246,44 @@ class AsyncDataFetcher:
         except Exception:
             return 0
 
+    async def _fetch_earnings_surprise(self, symbol: str) -> float | None:
+        """Fetch most recent earnings surprise percentage."""
+        url = f"{self._base_url}/stock/earnings"
+        params = {
+            "symbol": symbol,
+            "limit": 1,
+            "token": self._finnhub_api_key,
+        }
+
+        try:
+            data = await self._fetch_with_retry(url, params)
+            if data and isinstance(data, list) and len(data) > 0:
+                item = data[0]
+                actual = item.get("actual")
+                estimate = item.get("estimate")
+                if actual is not None and estimate is not None and estimate != 0:
+                    return ((actual - estimate) / abs(estimate)) * 100
+            return None
+        except Exception:
+            return None
+
+    async def _fetch_price_target(self, symbol: str, current_price: float) -> float | None:
+        """Fetch analyst price target and calculate upside percentage."""
+        url = f"{self._base_url}/stock/price-target"
+        params = {
+            "symbol": symbol,
+            "token": self._finnhub_api_key,
+        }
+
+        try:
+            data = await self._fetch_with_retry(url, params)
+            target_mean = data.get("targetMean")
+            if target_mean and target_mean > 0 and current_price > 0:
+                return ((target_mean - current_price) / current_price) * 100
+            return None
+        except Exception:
+            return None
+
     async def fetch_stock_data(
         self,
         symbol: str,
@@ -278,9 +316,10 @@ class AsyncDataFetcher:
                 quote_task = self._fetch_quote(symbol)
                 financials_task = self._fetch_financials(symbol)
                 news_task = self._fetch_news_count(symbol)
+                earnings_task = self._fetch_earnings_surprise(symbol)
 
-                candles, quote, financials, news_count = await asyncio.gather(
-                    candles_task, quote_task, financials_task, news_task,
+                candles, quote, financials, news_count, earnings_surprise = await asyncio.gather(
+                    candles_task, quote_task, financials_task, news_task, earnings_task,
                     return_exceptions=True,
                 )
 
@@ -293,6 +332,8 @@ class AsyncDataFetcher:
                     financials = {}
                 if isinstance(news_count, Exception):
                     news_count = 0
+                if isinstance(earnings_surprise, Exception):
+                    earnings_surprise = None
 
                 # Extract price data
                 prices = candles.get("close", [])
@@ -326,6 +367,10 @@ class AsyncDataFetcher:
                 if previous_close and previous_close > 0:
                     gap_pct = ((open_price - previous_close) / previous_close) * 100
 
+                # Fetch price target (needs current price)
+                current_price = prices[-1] if prices else 0
+                analyst_revision = await self._fetch_price_target(symbol, current_price)
+
                 # Create V1 data
                 v1_data = StockData(
                     symbol=symbol,
@@ -358,8 +403,8 @@ class AsyncDataFetcher:
                     sector_avg_pe=25.0,
                     vix_level=vix_level,
                     gap_pct=gap_pct,
-                    earnings_surprise_pct=None,
-                    analyst_revision_score=None,
+                    earnings_surprise_pct=earnings_surprise,
+                    analyst_revision_score=analyst_revision,
                 )
 
                 return FetchResult(
