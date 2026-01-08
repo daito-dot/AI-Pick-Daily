@@ -257,6 +257,7 @@ export async function getPerformanceHistory(days: number = 30, marketType: Marke
       .eq('was_picked', true)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
       .gte('batch_date', startDate.toISOString().split('T')[0])
+      .not('return_5d', 'is', null)  // Filter out pending (consistent with getPerformanceComparison)
       .order('batch_date', { ascending: false });
 
     if (error) {
