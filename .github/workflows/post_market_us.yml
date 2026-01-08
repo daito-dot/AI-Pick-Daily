@@ -1,13 +1,13 @@
-name: Morning Scoring Batch (Japan)
+name: Post-Market Scoring (US)
 
 on:
   schedule:
     # ========================================
-    # 日本株 朝バッチ: 毎日 JST 16:00 (UTC 07:00)
-    # - 日本市場終了後のデータを収集・スコアリング
-    # - 月〜金のJST夕方に実行 (Mon-Fri UTC)
+    # 米国株 ポストマーケット: 毎日 EST 17:00 (UTC 22:00)
+    # - 米国市場終了後(16:00 EST)のデータを収集・スコアリング
+    # - 月〜金に実行 (UTC: Sun-Thu)
     # ========================================
-    - cron: "0 7 * * 1-5"
+    - cron: "0 22 * * 0-4"
 
   workflow_dispatch:
     inputs:
@@ -20,9 +20,9 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  scoring-jp:
+  scoring:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -43,6 +43,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           echo "Checking environment variables..."
@@ -58,6 +59,11 @@ jobs:
           else
             echo "SUPABASE_SERVICE_ROLE_KEY is set (length: ${#SUPABASE_SERVICE_ROLE_KEY})"
           fi
+          if [ -z "$FINNHUB_API_KEY" ]; then
+            echo "WARNING: FINNHUB_API_KEY is not set"
+          else
+            echo "FINNHUB_API_KEY is set (length: ${#FINNHUB_API_KEY})"
+          fi
           if [ -z "$GEMINI_API_KEY" ]; then
             echo "WARNING: GEMINI_API_KEY is not set"
           else
@@ -65,7 +71,7 @@ jobs:
           fi
           echo "All required environment variables verified."
 
-      - name: Run morning scoring for Japan stocks
+      - name: Run morning scoring
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
           SCORING_MODEL: ${{ vars.SCORING_MODEL || 'gemini-2.5-flash-lite' }}
@@ -73,18 +79,19 @@ jobs:
           REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro-preview' }}
           DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro-preview' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ENABLE_JUDGMENT: ${{ vars.ENABLE_JUDGMENT || 'true' }}
           JUDGMENT_THINKING_LEVEL: ${{ vars.JUDGMENT_THINKING_LEVEL || 'low' }}
           DEBUG: ${{ github.event.inputs.debug || 'false' }}
         run: |
-          python scripts/daily_scoring_jp.py
+          python scripts/daily_scoring.py
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: scoring-jp-logs-${{ github.run_id }}
+          name: scoring-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30

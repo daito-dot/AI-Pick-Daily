@@ -956,3 +956,31 @@ export async function getRecentBatchFailures(days: number = 7): Promise<BatchExe
     return [];
   }
 }
+
+/**
+ * Fetch batch execution history for display
+ */
+export async function getBatchExecutionHistory(days: number = 7): Promise<BatchExecutionLog[]> {
+  try {
+    const supabase = getSupabase();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const { data, error } = await supabase
+      .from('batch_execution_logs')
+      .select('*')
+      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .order('started_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error('[getBatchExecutionHistory] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getBatchExecutionHistory error:', error);
+    return [];
+  }
+}

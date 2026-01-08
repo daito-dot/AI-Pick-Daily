@@ -451,6 +451,30 @@ def fetch_stock_data(
     if previous_close and previous_close > 0:
         gap_pct = ((open_price - previous_close) / previous_close) * 100
 
+    # === Get earnings surprise (V2 catalyst data) ===
+    earnings_surprise_pct = None
+    try:
+        surprises = finnhub.get_earnings_surprise(symbol, limit=1)
+        if surprises:
+            # Use the most recent earnings surprise
+            earnings_surprise_pct = surprises[0].surprise_pct
+            logger.debug(f"{symbol}: earnings surprise {earnings_surprise_pct:.1f}%")
+    except Exception as e:
+        logger.debug(f"{symbol}: earnings surprise failed: {e}")
+
+    # === Get analyst price target revision (V2 catalyst data) ===
+    analyst_revision_score = None
+    try:
+        price_target = finnhub.get_price_target(symbol)
+        current_price = prices[-1] if prices else 0
+        if price_target and price_target.target_mean > 0 and current_price > 0:
+            # Calculate upside potential as revision score
+            # Positive = analysts expect upside, Negative = downside
+            analyst_revision_score = ((price_target.target_mean - current_price) / current_price) * 100
+            logger.debug(f"{symbol}: analyst target upside {analyst_revision_score:.1f}%")
+    except Exception as e:
+        logger.debug(f"{symbol}: price target failed: {e}")
+
     # V1 Stock Data
     v1_data = StockData(
         symbol=symbol,
@@ -483,8 +507,8 @@ def fetch_stock_data(
         sector_avg_pe=25.0,
         vix_level=vix_level,
         gap_pct=gap_pct,
-        earnings_surprise_pct=None,
-        analyst_revision_score=None,
+        earnings_surprise_pct=earnings_surprise_pct,
+        analyst_revision_score=analyst_revision_score,
     )
 
     return v1_data, v2_data

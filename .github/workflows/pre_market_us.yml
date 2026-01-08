@@ -1,14 +1,15 @@
-name: Evening Review Batch (Japan)
+name: Pre-Market Review (US)
 
 on:
   schedule:
     # ========================================
-    # 日本株 夕バッチ: 毎日 JST 08:00 (UTC 23:00)
-    # - 前日の推奨銘柄のパフォーマンス追跡
+    # 米国株 プレマーケット: 毎日 JST 07:00 (UTC 22:00)
+    # - 米国市場終了後にパフォーマンス追跡
     # - ポジション管理・決済判断
-    # - 月〜金のJST朝に実行 (Sun-Thu UTC)
+    # - 月〜金に実行
+    # ※ US市場閉場(16:00 EST/EDT)から1時間後に実行
     # ========================================
-    - cron: "0 23 * * 0-4"
+    - cron: "0 22 * * 1-5"
 
   workflow_dispatch:
     inputs:
@@ -21,7 +22,7 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  review-jp:
+  review:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -40,23 +41,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run evening review for Japan stocks
+      - name: Run evening review
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
           SCORING_MODEL: ${{ vars.SCORING_MODEL || 'gemini-2.5-flash-lite' }}
           ANALYSIS_MODEL: ${{ vars.ANALYSIS_MODEL || 'gemini-3-flash-preview' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DEBUG: ${{ github.event.inputs.debug || 'false' }}
         run: |
-          python scripts/daily_review_jp.py
+          python scripts/daily_review.py
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: review-jp-logs-${{ github.run_id }}
+          name: review-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30

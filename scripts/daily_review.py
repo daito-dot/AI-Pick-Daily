@@ -537,9 +537,26 @@ def main():
         "aggressive": float(v2_config.get("threshold", 75)) if v2_config else 75,
     }
 
-    # Get current scores for score-drop exit check
-    today_scores = supabase.get_scores_for_review(today)
-    current_scores = {s["symbol"]: s.get("composite_score", 0) for s in today_scores}
+    # Get scores for exit evaluation using BATCH LINKING (not date-based)
+    # Each strategy_mode is linked to its unreviewed Post-Market batch
+    scores_by_strategy: dict[str, dict[str, int]] = {}
+    reviewed_batches: list[str] = []  # Track batch IDs to mark as reviewed
+
+    for strategy in ["conservative", "aggressive"]:
+        unreviewed_batch = supabase.get_unreviewed_batch(strategy)
+        if unreviewed_batch:
+            batch_date = unreviewed_batch["batch_date"]
+            batch_id = unreviewed_batch["id"]
+            logger.info(
+                f"Found unreviewed batch for {strategy}: {batch_date} "
+                f"(picks: {unreviewed_batch['pick_count']})"
+            )
+            # Get scores from the linked batch
+            scores_by_strategy[strategy] = supabase.get_scores_for_batch(batch_date, strategy)
+            reviewed_batches.append(batch_id)
+        else:
+            logger.info(f"No unreviewed batch for {strategy}")
+            scores_by_strategy[strategy] = {}
 
     # Get all open positions
     all_positions = portfolio.get_open_positions()
@@ -549,13 +566,20 @@ def main():
     exit_signals = []
 
     if all_positions:
-        # Evaluate exit signals
-        exit_signals = portfolio.evaluate_exit_signals(
-            positions=all_positions,
-            current_scores=current_scores if current_scores else None,
-            thresholds=thresholds,
-            market_regime=market_regime_str,
-        )
+        # Evaluate exit signals for each strategy using its linked scores
+        for strategy in ["conservative", "aggressive"]:
+            strategy_positions = [p for p in all_positions if p.strategy_mode == strategy]
+            if not strategy_positions:
+                continue
+
+            current_scores = scores_by_strategy.get(strategy, {})
+            strategy_exit_signals = portfolio.evaluate_exit_signals(
+                positions=strategy_positions,
+                current_scores=current_scores if current_scores else None,
+                thresholds=thresholds,
+                market_regime=market_regime_str,
+            )
+            exit_signals.extend(strategy_exit_signals)
 
         if exit_signals:
             logger.info(f"Exit signals triggered: {len(exit_signals)}")
@@ -571,10 +595,16 @@ def main():
                 market_regime_at_exit=market_regime_str,
             )
             logger.info(f"Closed {len(trades)} positions")
+
         else:
             logger.info("No exit signals triggered")
     else:
         logger.info("No open positions to evaluate")
+
+    # Mark batches as reviewed (regardless of whether positions were closed)
+    for batch_id in reviewed_batches:
+        supabase.mark_batch_reviewed(batch_id)
+        logger.info(f"Marked batch {batch_id} as reviewed")
 
     # Get S&P500 daily return for benchmark (always track regardless of positions)
     sp500_daily_pct = yf_client.get_sp500_daily_return()
