@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
 from src.research import DeepResearchService
+from src.batch_logger import BatchLogger, BatchType
 
 # Setup logging
 log_dir = Path("logs")
@@ -43,10 +44,14 @@ def main():
     logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
     logger.info("=" * 50)
 
+    # Start batch logging
+    batch_ctx = BatchLogger.start(BatchType.WEEKLY_RESEARCH)
+
     try:
         research_service = DeepResearchService()
     except Exception as e:
         logger.error(f"Failed to initialize research service: {e}")
+        BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
     # Build market context (would normally come from data sources)
@@ -122,11 +127,18 @@ def main():
         logger.error(f"Research failed: {e}")
         import traceback
         traceback.print_exc()
+        BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
     logger.info("\n" + "=" * 50)
     logger.info("Weekly research completed successfully")
     logger.info("=" * 50)
+
+    # Finish batch logging
+    batch_ctx.total_items = 1  # 1 research report
+    batch_ctx.successful_items = 1
+    batch_ctx.failed_items = 0
+    BatchLogger.finish(batch_ctx)
 
 
 if __name__ == "__main__":

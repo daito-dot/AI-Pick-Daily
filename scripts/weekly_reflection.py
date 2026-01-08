@@ -45,7 +45,7 @@ def main():
     logger.info("=" * 50)
 
     # Start batch logging
-    batch_ctx = BatchLogger.start(BatchType.WEEKLY_RESEARCH)
+    batch_ctx = BatchLogger.start(BatchType.REFLECTION)
 
     # Check if reflection is enabled
     if not config.llm.enable_reflection:
