@@ -16,7 +16,7 @@ automatically adapts its behavior based on past performance.
 import logging
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add src to path
@@ -96,7 +96,7 @@ def calculate_all_returns_jp(
     Returns:
         Dict with results summary
     """
-    check_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    check_date = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
     logger.info(f"Calculating {return_field} returns for ALL JP stocks from {check_date}")
 
     # Get ALL JP scores from that date (using strategy_mode filter)
@@ -537,7 +537,7 @@ def main():
     )
 
     # Get current market regime
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     current_regime = supabase.get_market_regime(today)
     market_regime_str = current_regime.get("market_regime") if current_regime else None
 
