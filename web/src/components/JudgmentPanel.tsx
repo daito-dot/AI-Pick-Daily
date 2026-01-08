@@ -633,7 +633,7 @@ const JudgmentCard = memo(function JudgmentCard({ judgment, isFinalPick, confide
   const passedLLM = judgment.decision === 'buy';
   const passedConfidence = judgment.confidence >= confThreshold;
   const ruleScore = ruleBasedScore?.composite_score ?? 0;
-  const scoreThresh = scoreThreshold ?? (isV1 ? 60 : 45);  // V2 uses lower threshold
+  const scoreThresh = scoreThreshold ?? (isV1 ? 60 : 75);  // V2 uses 75 threshold
   const passedScoreThreshold = ruleScore >= scoreThresh;
 
   // Get filter status message (reflects LLM-first selection)
@@ -800,7 +800,7 @@ export function JudgmentPanel({
   finalPicks,
   confidenceThreshold = { conservative: 0.6, aggressive: 0.5 },
   ruleBasedScores,
-  scoreThreshold = { conservative: 60, aggressive: 45 },  // V2: 75→45 (risk filter only)
+  scoreThreshold = { conservative: 60, aggressive: 75 },  // V2: 75 (consistent with DB)
   isJapan = false,
 }: JudgmentPanelProps) {
   const [filter, setFilter] = useState<'all' | 'buy' | 'hold' | 'avoid'>('all');

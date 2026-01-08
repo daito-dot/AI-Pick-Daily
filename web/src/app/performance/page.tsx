@@ -93,7 +93,7 @@ function PerformanceContent({
             <div className="p-4 bg-blue-50 rounded-lg">
               <h4 className="font-medium text-blue-800 mb-2">推奨した銘柄</h4>
               <div className="space-y-1 text-sm">
-                <p>件数: <span className="font-bold">{comparison.pickedCount}</span></p>
+                <p>件数: <span className="font-bold">{completedTrades.length}</span></p>
                 <p>平均リターン: <span className={`font-bold ${comparison.pickedAvgReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {comparison.pickedAvgReturn.toFixed(2)}%
                 </span></p>
