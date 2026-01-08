@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add src to path
@@ -412,7 +412,7 @@ def main():
     batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, model=config.llm.scoring_model)
 
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Initialize clients
         yf_client = get_yfinance_client()

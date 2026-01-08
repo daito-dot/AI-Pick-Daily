@@ -39,6 +39,25 @@ const STRATEGY_MODES = {
 } as const;
 
 /**
+ * Get today's date in UTC as YYYY-MM-DD string.
+ * This ensures consistency with backend batch jobs that run in UTC.
+ */
+function getUTCToday(): string {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Get a date N days ago in UTC as YYYY-MM-DD string.
+ * Uses UTC-based arithmetic to avoid timezone issues.
+ */
+function getUTCDateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - days);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
  * Fetch today's picks with scores for both strategies
  */
 export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
@@ -51,7 +70,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
 }> {
   try {
     const supabase = getSupabase();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getUTCToday();
     const modes = STRATEGY_MODES[marketType];
 
     // First try today's date, then fallback to most recent
@@ -167,7 +186,7 @@ export async function getTodayPicksByStrategy(strategyMode: StrategyModeType): P
 }> {
   try {
     const supabase = getSupabase();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getUTCToday();
 
     const { data: picks } = await supabase
       .from('daily_picks')
@@ -206,13 +225,11 @@ export async function getTodayPicksByStrategy(strategyMode: StrategyModeType): P
 export async function getRecentPicks(days: number = 7): Promise<DailyPick[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data } = await supabase
       .from('daily_picks')
       .select('*')
-      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .gte('batch_date', getUTCDateDaysAgo(days))
       .order('batch_date', { ascending: false });
 
     return data || [];
@@ -247,8 +264,6 @@ export async function getScoresForDate(date: string): Promise<StockScore[]> {
 export async function getPerformanceHistory(days: number = 30, marketType: MarketType = 'us'): Promise<PerformanceLog[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
     const modes = STRATEGY_MODES[marketType];
 
     const { data, error } = await supabase
@@ -256,7 +271,7 @@ export async function getPerformanceHistory(days: number = 30, marketType: Marke
       .select('*')
       .eq('was_picked', true)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
-      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .gte('batch_date', getUTCDateDaysAgo(days))
       .not('return_5d', 'is', null)  // Filter out pending (consistent with getPerformanceComparison)
       .order('batch_date', { ascending: false });
 
@@ -325,13 +340,11 @@ export async function getAILessons(limit: number = 10, marketType: MarketType = 
 export async function getMarketRegimeHistory(days: number = 30): Promise<MarketRegimeHistory[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data } = await supabase
       .from('market_regime_history')
       .select('*')
-      .gte('check_date', startDate.toISOString().split('T')[0])
+      .gte('check_date', getUTCDateDaysAgo(days))
       .order('check_date', { ascending: false });
 
     return data || [];
@@ -347,15 +360,13 @@ export async function getMarketRegimeHistory(days: number = 30): Promise<MarketR
 export async function getMissedOpportunities(days: number = 30, minReturn: number = 3.0, marketType: MarketType = 'us'): Promise<StockScore[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
     const modes = STRATEGY_MODES[marketType];
 
     const { data } = await supabase
       .from('stock_scores')
       .select('*')
       .in('strategy_mode', [modes.conservative, modes.aggressive])
-      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .gte('batch_date', getUTCDateDaysAgo(days))
       .eq('was_picked', false)
       .gte('return_5d', minReturn)
       .order('return_5d', { ascending: false })
@@ -380,15 +391,13 @@ export async function getPerformanceComparison(days: number = 30, marketType: Ma
 }> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
     const modes = STRATEGY_MODES[marketType];
 
     const { data } = await supabase
       .from('stock_scores')
       .select('was_picked, return_5d')
       .in('strategy_mode', [modes.conservative, modes.aggressive])
-      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .gte('batch_date', getUTCDateDaysAgo(days))
       .not('return_5d', 'is', null);
 
     if (!data || data.length === 0) {
@@ -435,14 +444,12 @@ export async function getPerformanceComparison(days: number = 30, marketType: Ma
 export async function getPortfolioSnapshots(strategyMode: string, days: number = 30): Promise<any[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data } = await supabase
       .from('portfolio_daily_snapshot')
       .select('*')
       .eq('strategy_mode', strategyMode)
-      .gte('snapshot_date', startDate.toISOString().split('T')[0])
+      .gte('snapshot_date', getUTCDateDaysAgo(days))
       .order('snapshot_date', { ascending: true });
 
     return data || [];
@@ -482,13 +489,11 @@ export async function getOpenPositions(strategyMode?: string): Promise<any[]> {
 export async function getTradeHistory(days: number = 30, strategyMode?: string): Promise<any[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     let query = supabase
       .from('trade_history')
       .select('*')
-      .gte('exit_date', startDate.toISOString().split('T')[0])
+      .gte('exit_date', getUTCDateDaysAgo(days))
       .order('exit_date', { ascending: false });
 
     if (strategyMode) {
@@ -526,13 +531,11 @@ export async function getScoringConfigs(): Promise<any[]> {
 export async function getThresholdHistory(days: number = 30): Promise<any[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data } = await supabase
       .from('threshold_history')
       .select('*')
-      .gte('adjustment_date', startDate.toISOString().split('T')[0])
+      .gte('adjustment_date', getUTCDateDaysAgo(days))
       .order('adjustment_date', { ascending: false });
 
     return data || [];
@@ -605,7 +608,7 @@ export async function getPortfolioSummary(strategyMode: string): Promise<{
 export async function getTodayJudgments(marketType: MarketType = 'us'): Promise<JudgmentRecord[]> {
   try {
     const supabase = getSupabase();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getUTCToday();
     const modes = STRATEGY_MODES[marketType];
 
     // First try today's date, then fallback to most recent
@@ -687,7 +690,7 @@ export async function getJudgmentBySymbol(
 ): Promise<JudgmentRecord | null> {
   try {
     const supabase = getSupabase();
-    const targetDate = date || new Date().toISOString().split('T')[0];
+    const targetDate = date || getUTCToday();
 
     let query = supabase
       .from('judgment_records')
@@ -719,13 +722,11 @@ export async function getJudgmentBySymbol(
 export async function getJudgmentHistory(days: number = 30): Promise<JudgmentRecord[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data, error } = await supabase
       .from('judgment_records')
       .select('*')
-      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .gte('batch_date', getUTCDateDaysAgo(days))
       .order('batch_date', { ascending: false })
       .order('confidence', { ascending: false });
 
@@ -754,13 +755,11 @@ export async function getJudgmentStats(days: number = 30): Promise<{
 }> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data, error } = await supabase
       .from('judgment_records')
       .select('decision, confidence')
-      .gte('batch_date', startDate.toISOString().split('T')[0]);
+      .gte('batch_date', getUTCDateDaysAgo(days));
 
     if (error || !data) {
       return {
@@ -872,7 +871,7 @@ import type { BatchExecutionLog, SystemStatus, BatchType } from '@/types';
 export async function getTodayBatchStatus(): Promise<SystemStatus> {
   try {
     const supabase = getSupabase();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getUTCToday();
 
     // First try today's date
     let { data, error } = await supabase
@@ -937,14 +936,12 @@ export async function getTodayBatchStatus(): Promise<SystemStatus> {
 export async function getRecentBatchFailures(days: number = 7): Promise<BatchExecutionLog[]> {
   try {
     const supabase = getSupabase();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
 
     const { data, error } = await supabase
       .from('batch_execution_logs')
       .select('*')
       .in('status', ['failed', 'partial_success'])
-      .gte('batch_date', startDate.toISOString().split('T')[0])
+      .gte('batch_date', getUTCDateDaysAgo(days))
       .order('started_at', { ascending: false })
       .limit(20);
 
