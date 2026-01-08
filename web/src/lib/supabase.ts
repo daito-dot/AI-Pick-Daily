@@ -257,6 +257,7 @@ export async function getPerformanceHistory(days: number = 30, marketType: Marke
       .eq('was_picked', true)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
       .gte('batch_date', startDate.toISOString().split('T')[0])
+      .not('return_5d', 'is', null)  // Filter out pending (consistent with getPerformanceComparison)
       .order('batch_date', { ascending: false });
 
     if (error) {
@@ -301,12 +302,13 @@ export async function getPerformanceHistory(days: number = 30, marketType: Marke
 /**
  * Fetch AI lessons
  */
-export async function getAILessons(limit: number = 10): Promise<AILesson[]> {
+export async function getAILessons(limit: number = 10, marketType: MarketType = 'us'): Promise<AILesson[]> {
   try {
     const supabase = getSupabase();
     const { data } = await supabase
       .from('ai_lessons')
       .select('*')
+      .eq('market_type', marketType)
       .order('lesson_date', { ascending: false })
       .limit(limit);
 

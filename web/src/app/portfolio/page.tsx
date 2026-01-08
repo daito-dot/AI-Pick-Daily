@@ -210,7 +210,7 @@ function PortfolioContent({
           <p className="text-4xl font-bold text-gray-700">{totalTrades}</p>
         </div>
         <div className="card text-center">
-          <p className="text-gray-500 text-sm">勝率</p>
+          <p className="text-gray-500 text-sm">勝率（実現）</p>
           <p className="text-4xl font-bold text-primary-600">{winRate}%</p>
         </div>
         <div className="card text-center">

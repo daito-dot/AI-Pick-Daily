@@ -93,7 +93,7 @@ function PerformanceContent({
             <div className="p-4 bg-blue-50 rounded-lg">
               <h4 className="font-medium text-blue-800 mb-2">推奨した銘柄</h4>
               <div className="space-y-1 text-sm">
-                <p>件数: <span className="font-bold">{comparison.pickedCount}</span></p>
+                <p>件数: <span className="font-bold">{completedTrades.length}</span></p>
                 <p>平均リターン: <span className={`font-bold ${comparison.pickedAvgReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {comparison.pickedAvgReturn.toFixed(2)}%
                 </span></p>
@@ -280,7 +280,8 @@ export default async function PerformancePage() {
     jpMissedOpportunities,
     usComparison,
     jpComparison,
-    lessons,
+    usLessons,
+    jpLessons,
   ] = await Promise.all([
     getPerformanceHistory(30, 'us'),
     getPerformanceHistory(30, 'jp'),
@@ -288,7 +289,8 @@ export default async function PerformancePage() {
     getMissedOpportunities(30, 3.0, 'jp'),
     getPerformanceComparison(30, 'us'),
     getPerformanceComparison(30, 'jp'),
-    getAILessons(5),
+    getAILessons(5, 'us'),
+    getAILessons(5, 'jp'),
   ]);
 
   // US Content
@@ -297,7 +299,7 @@ export default async function PerformancePage() {
       performance={usPerformance}
       missedOpportunities={usMissedOpportunities}
       comparison={usComparison}
-      lessons={lessons}
+      lessons={usLessons}
       isJapan={false}
     />
   );
@@ -308,7 +310,7 @@ export default async function PerformancePage() {
       performance={jpPerformance}
       missedOpportunities={jpMissedOpportunities}
       comparison={jpComparison}
-      lessons={lessons}
+      lessons={jpLessons}
       isJapan={true}
     />
   );
