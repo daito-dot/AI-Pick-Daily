@@ -626,23 +626,32 @@ def main():
             logger.error(f"Failed to update snapshot for {strategy}: {e}")
 
     # 4. Generate AI reflection (focus on 5-day results)
+    logger.info("Step 4: Generating AI reflection for JP stocks...")
     if not results_5d.get("error"):
-        logger.info("Step 4: Generating AI reflection for JP stocks...")
         reflection = generate_reflection_jp(llm, results_5d)
         logger.info(f"Reflection:\n{reflection}")
+        missed_opportunities = results_5d.get("missed_opportunities", [])
+    else:
+        # Fallback: save a placeholder lesson when no 5-day data available
+        logger.warning(f"No 5-day data available for JP: {results_5d.get('error')}")
+        reflection = f"5日前のデータがまだ蓄積されていないため、本日のパフォーマンス分析はスキップされました。データ蓄積後に詳細な分析が開始されます。（{results_5d.get('error', 'Unknown error')}）"
+        missed_opportunities = []
 
-        # 5. Save lesson
-        logger.info("Step 5: Saving JP AI lesson...")
-        save_ai_lesson_jp(
-            supabase,
-            reflection,
-            results_5d.get("missed_opportunities", []),
-            today,
-        )
+    # 5. Save lesson (always save, even if just a placeholder)
+    logger.info("Step 5: Saving JP AI lesson...")
+    save_ai_lesson_jp(
+        supabase,
+        reflection,
+        missed_opportunities,
+        today,
+    )
 
-        # 6. FEEDBACK LOOP: Adjust thresholds based on performance
+    # 6. FEEDBACK LOOP: Adjust thresholds based on performance (only if we have data)
+    if not results_5d.get("error"):
         logger.info("Step 6: Analyzing and adjusting JP thresholds (FEEDBACK LOOP)...")
         adjust_thresholds_jp(supabase, results_5d)
+    else:
+        logger.info("Step 6: Skipping JP threshold adjustment (no 5-day data)")
 
     # 7. Get and log performance summary
     logger.info("Step 7: Getting overall JP performance summary...")
