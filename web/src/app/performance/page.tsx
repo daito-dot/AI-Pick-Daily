@@ -280,7 +280,8 @@ export default async function PerformancePage() {
     jpMissedOpportunities,
     usComparison,
     jpComparison,
-    lessons,
+    usLessons,
+    jpLessons,
   ] = await Promise.all([
     getPerformanceHistory(30, 'us'),
     getPerformanceHistory(30, 'jp'),
@@ -288,7 +289,8 @@ export default async function PerformancePage() {
     getMissedOpportunities(30, 3.0, 'jp'),
     getPerformanceComparison(30, 'us'),
     getPerformanceComparison(30, 'jp'),
-    getAILessons(5),
+    getAILessons(5, 'us'),
+    getAILessons(5, 'jp'),
   ]);
 
   // US Content
@@ -297,7 +299,7 @@ export default async function PerformancePage() {
       performance={usPerformance}
       missedOpportunities={usMissedOpportunities}
       comparison={usComparison}
-      lessons={lessons}
+      lessons={usLessons}
       isJapan={false}
     />
   );
@@ -308,7 +310,7 @@ export default async function PerformancePage() {
       performance={jpPerformance}
       missedOpportunities={jpMissedOpportunities}
       comparison={jpComparison}
-      lessons={lessons}
+      lessons={jpLessons}
       isJapan={true}
     />
   );

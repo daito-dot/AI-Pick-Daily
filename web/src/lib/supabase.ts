@@ -302,12 +302,13 @@ export async function getPerformanceHistory(days: number = 30, marketType: Marke
 /**
  * Fetch AI lessons
  */
-export async function getAILessons(limit: number = 10): Promise<AILesson[]> {
+export async function getAILessons(limit: number = 10, marketType: MarketType = 'us'): Promise<AILesson[]> {
   try {
     const supabase = getSupabase();
     const { data } = await supabase
       .from('ai_lessons')
       .select('*')
+      .eq('market_type', marketType)
       .order('lesson_date', { ascending: false })
       .limit(limit);
 

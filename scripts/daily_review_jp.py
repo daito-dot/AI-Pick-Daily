@@ -317,17 +317,16 @@ def save_ai_lesson_jp(
             for m in missed[:5]
         ])
 
-        # Use a different lesson_date format to distinguish from US lessons
-        lesson_date = f"{date}_jp"
-
+        # Use market_type column to distinguish from US lessons (not modifying lesson_date)
         supabase._client.table("ai_lessons").upsert({
-            "lesson_date": lesson_date,
+            "lesson_date": date,  # Keep as DATE format (YYYY-MM-DD)
+            "market_type": "jp",  # Use market_type column for distinction
             "lesson_text": reflection,
             "biggest_miss_symbols": missed_symbols,
             "miss_analysis": miss_analysis,
-        }, on_conflict="lesson_date").execute()
+        }, on_conflict="lesson_date,market_type").execute()
 
-        logger.info(f"Saved JP AI lesson for {lesson_date}")
+        logger.info(f"Saved JP AI lesson for {date}")
     except Exception as e:
         logger.error(f"Failed to save JP AI lesson: {e}")
 

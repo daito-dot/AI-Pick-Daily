@@ -315,10 +315,11 @@ def save_ai_lesson(
 
         supabase._client.table("ai_lessons").upsert({
             "lesson_date": date,
+            "market_type": "us",  # Explicitly set market_type for US lessons
             "lesson_text": reflection,
             "biggest_miss_symbols": missed_symbols,
             "miss_analysis": miss_analysis,
-        }, on_conflict="lesson_date").execute()
+        }, on_conflict="lesson_date,market_type").execute()
 
         logger.info(f"Saved AI lesson for {date}")
     except Exception as e:
