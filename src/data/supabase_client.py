@@ -942,18 +942,38 @@ class SupabaseClient:
 
         Returns:
             Batch info dict with id, batch_date, symbols, or None if no unreviewed batch
+
+        Note:
+            Falls back to latest batch if reviewed_at column doesn't exist
+            (migration 011 not applied yet).
         """
-        result = (
-            self._client.table("daily_picks")
-            .select("id, batch_date, symbols, pick_count")
-            .eq("strategy_mode", strategy_mode)
-            .eq("status", "published")
-            .is_("reviewed_at", "null")
-            .order("batch_date", desc=True)
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        try:
+            # Try with reviewed_at filter (requires migration 011)
+            result = (
+                self._client.table("daily_picks")
+                .select("id, batch_date, symbols, pick_count")
+                .eq("strategy_mode", strategy_mode)
+                .eq("status", "published")
+                .is_("reviewed_at", "null")
+                .order("batch_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception as e:
+            # Fallback: column doesn't exist, get latest batch by date
+            if "reviewed_at" in str(e) and "does not exist" in str(e):
+                result = (
+                    self._client.table("daily_picks")
+                    .select("id, batch_date, symbols, pick_count")
+                    .eq("strategy_mode", strategy_mode)
+                    .eq("status", "published")
+                    .order("batch_date", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                return result.data[0] if result.data else None
+            raise
 
     def mark_batch_reviewed(
         self,
@@ -967,16 +987,26 @@ class SupabaseClient:
 
         Returns:
             True if successful
+
+        Note:
+            Silently succeeds if reviewed_at column doesn't exist
+            (migration 011 not applied yet).
         """
         from datetime import datetime, timezone
 
-        result = (
-            self._client.table("daily_picks")
-            .update({"reviewed_at": datetime.now(timezone.utc).isoformat()})
-            .eq("id", batch_id)
-            .execute()
-        )
-        return bool(result.data)
+        try:
+            result = (
+                self._client.table("daily_picks")
+                .update({"reviewed_at": datetime.now(timezone.utc).isoformat()})
+                .eq("id", batch_id)
+                .execute()
+            )
+            return bool(result.data)
+        except Exception as e:
+            # Column doesn't exist yet - silently succeed
+            if "reviewed_at" in str(e) and "does not exist" in str(e):
+                return True
+            raise
 
     def get_scores_for_batch(
         self,
