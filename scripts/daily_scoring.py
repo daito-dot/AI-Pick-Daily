@@ -893,8 +893,9 @@ def main():
     try:
         v1_config = supabase.get_scoring_config("conservative")
         v2_config = supabase.get_scoring_config("aggressive")
-        v1_threshold = int(v1_config.get("threshold", 60)) if v1_config else None
-        v2_threshold = int(v2_config.get("threshold", 75)) if v2_config else None
+        # Use float() first to handle decimal strings like "45.00"
+        v1_threshold = int(float(v1_config.get("threshold", 60))) if v1_config else None
+        v2_threshold = int(float(v2_config.get("threshold", 45))) if v2_config else None
         logger.info(f"Dynamic thresholds: V1={v1_threshold}, V2={v2_threshold}")
     except Exception as e:
         logger.warning(f"Failed to fetch dynamic thresholds, using defaults: {e}")
