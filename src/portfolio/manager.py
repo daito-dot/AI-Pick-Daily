@@ -31,7 +31,7 @@ RISK_FREE_RATE = 0.02  # Annual risk-free rate for Sharpe calculation
 # See: docs/paper_trading_strategy.md Section 2.4
 MDD_WARNING_THRESHOLD = -10.0  # Reduce position size by 50%
 MDD_STOP_NEW_THRESHOLD = -15.0  # Stop opening new positions
-MDD_CRITICAL_THRESHOLD = -20.0  # Consider closing all positions
+MDD_CRITICAL_THRESHOLD = -50.0  # Consider closing all positions (was -20, relaxed to allow recovery)
 
 ExitReason = Literal["score_drop", "stop_loss", "take_profit", "max_hold", "regime_change"]
 
