@@ -71,8 +71,8 @@ jobs:
   research:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: ${{ github.event.inputs.run_research != 'false' }}
-    needs: reflection  # Run after reflection
+    needs: reflection
+    if: ${{ !failure() && github.event.inputs.run_research != 'false' }}  # Run even if reflection was skipped
 
     steps:
       - name: Checkout repository
