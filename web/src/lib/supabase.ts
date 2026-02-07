@@ -3,11 +3,13 @@ import type {
   DailyPick,
   StockScore,
   MarketRegimeHistory,
-  AILesson,
   PerformanceLog,
   StrategyModeType,
   JudgmentRecord,
   ReflectionRecord,
+  PerformanceStats,
+  FactorWeights,
+  PortfolioSummaryWithRisk,
 } from '@/types';
 
 // Lazy initialization to handle build-time when env vars may not be set
@@ -315,21 +317,162 @@ export async function getPerformanceHistory(days: number = 30, marketType: Marke
 }
 
 /**
- * Fetch AI lessons
+ * Fetch performance stats (replaces AI Lessons).
+ * Mirrors build_performance_stats() from Python backend.
  */
-export async function getAILessons(limit: number = 10, marketType: MarketType = 'us'): Promise<AILesson[]> {
+export async function getPerformanceStats(marketType: MarketType = 'us'): Promise<PerformanceStats | null> {
   try {
     const supabase = getSupabase();
-    const { data } = await supabase
-      .from('ai_lessons')
-      .select('*')
-      .eq('market_type', marketType)
-      .order('lesson_date', { ascending: false })
-      .limit(limit);
+    const modes = STRATEGY_MODES[marketType];
 
-    return data || [];
+    const { data, error } = await supabase
+      .from('judgment_outcomes')
+      .select('outcome_aligned, actual_return_5d, judgment_records!inner(decision, strategy_mode)')
+      .in('judgment_records.strategy_mode', [modes.conservative, modes.aggressive])
+      .gte('outcome_date', getUTCDateDaysAgo(30));
+
+    if (error || !data || data.length < 5) {
+      return null;
+    }
+
+    const buyOutcomes = data.filter((d: any) => d.judgment_records?.decision === 'buy');
+    const avoidOutcomes = data.filter((d: any) =>
+      d.judgment_records?.decision === 'avoid' || d.judgment_records?.decision === 'hold'
+    );
+
+    const buyWins = buyOutcomes.filter((d: any) => d.outcome_aligned === true);
+    const avoidCorrect = avoidOutcomes.filter((d: any) => d.outcome_aligned === true);
+
+    const buyReturns = buyOutcomes
+      .map((d: any) => d.actual_return_5d)
+      .filter((r: any) => r !== null) as number[];
+    const buyAvgReturn = buyReturns.length > 0
+      ? buyReturns.reduce((a: number, b: number) => a + b, 0) / buyReturns.length
+      : 0;
+
+    return {
+      buy_count: buyOutcomes.length,
+      buy_win_count: buyWins.length,
+      buy_win_rate: buyOutcomes.length > 0 ? (buyWins.length / buyOutcomes.length) * 100 : 0,
+      buy_avg_return: buyAvgReturn,
+      avoid_count: avoidOutcomes.length,
+      avoid_correct_count: avoidCorrect.length,
+      avoid_accuracy: avoidOutcomes.length > 0 ? (avoidCorrect.length / avoidOutcomes.length) * 100 : 0,
+    };
   } catch (error) {
-    console.error('getAILessons error:', error);
+    console.error('getPerformanceStats error:', error);
+    return null;
+  }
+}
+
+/**
+ * Fetch factor weights from scoring_config
+ */
+export async function getFactorWeights(marketType: MarketType = 'us'): Promise<{
+  v1: FactorWeights | null;
+  v2: FactorWeights | null;
+}> {
+  try {
+    const supabase = getSupabase();
+    const modes = STRATEGY_MODES[marketType];
+
+    const { data } = await supabase
+      .from('scoring_config')
+      .select('strategy_mode, factor_weights')
+      .in('strategy_mode', [modes.conservative, modes.aggressive]);
+
+    const v1Config = data?.find((d: any) => d.strategy_mode === modes.conservative);
+    const v2Config = data?.find((d: any) => d.strategy_mode === modes.aggressive);
+
+    return {
+      v1: v1Config?.factor_weights || null,
+      v2: v2Config?.factor_weights || null,
+    };
+  } catch (error) {
+    console.error('getFactorWeights error:', error);
+    return { v1: null, v2: null };
+  }
+}
+
+/**
+ * Fetch past picks with scores (for Analytics page, replaces getRecentPicks for detailed view)
+ */
+export async function getPastPicksDetailed(days: number = 30, marketType: MarketType = 'us'): Promise<{
+  date: string;
+  market: MarketType;
+  regime: string;
+  v1Picks: string[];
+  v2Picks: string[];
+  v1TopScores: Array<{ symbol: string; score: number; return_5d: number | null }>;
+  v2TopScores: Array<{ symbol: string; score: number; return_5d: number | null }>;
+}[]> {
+  try {
+    const supabase = getSupabase();
+    const modes = STRATEGY_MODES[marketType];
+
+    const [{ data: picks }, { data: scores }] = await Promise.all([
+      supabase
+        .from('daily_picks')
+        .select('*')
+        .in('strategy_mode', [modes.conservative, modes.aggressive])
+        .gte('batch_date', getUTCDateDaysAgo(days))
+        .order('batch_date', { ascending: false }),
+      supabase
+        .from('stock_scores')
+        .select('symbol, batch_date, strategy_mode, composite_score, return_5d, was_picked')
+        .in('strategy_mode', [modes.conservative, modes.aggressive])
+        .gte('batch_date', getUTCDateDaysAgo(days))
+        .eq('was_picked', true)
+        .order('composite_score', { ascending: false }),
+    ]);
+
+    if (!picks) return [];
+
+    const dateMap = new Map<string, any>();
+
+    for (const pick of picks) {
+      const key = pick.batch_date;
+      if (!dateMap.has(key)) {
+        dateMap.set(key, {
+          date: pick.batch_date,
+          market: marketType,
+          regime: pick.market_regime || 'normal',
+          v1Picks: [],
+          v2Picks: [],
+          v1TopScores: [],
+          v2TopScores: [],
+        });
+      }
+      const entry = dateMap.get(key)!;
+      const isV1 = pick.strategy_mode === modes.conservative;
+      if (isV1) {
+        entry.v1Picks = pick.symbols || [];
+      } else {
+        entry.v2Picks = pick.symbols || [];
+      }
+    }
+
+    if (scores) {
+      for (const score of scores) {
+        const entry = dateMap.get(score.batch_date);
+        if (!entry) continue;
+        const isV1 = score.strategy_mode === modes.conservative;
+        const scoreEntry = {
+          symbol: score.symbol,
+          score: score.composite_score,
+          return_5d: score.return_5d,
+        };
+        if (isV1) {
+          entry.v1TopScores.push(scoreEntry);
+        } else {
+          entry.v2TopScores.push(scoreEntry);
+        }
+      }
+    }
+
+    return Array.from(dateMap.values());
+  } catch (error) {
+    console.error('getPastPicksDetailed error:', error);
     return [];
   }
 }
@@ -546,16 +689,21 @@ export async function getThresholdHistory(days: number = 30): Promise<any[]> {
 }
 
 /**
- * Get portfolio summary stats
+ * Get portfolio summary stats with risk metrics
  */
-export async function getPortfolioSummary(strategyMode: string): Promise<{
-  totalValue: number;
-  cashBalance: number;
-  positionsValue: number;
-  openPositions: number;
-  cumulativePnlPct: number;
-  alpha: number;
-}> {
+export async function getPortfolioSummary(strategyMode: string): Promise<PortfolioSummaryWithRisk> {
+  const defaults: PortfolioSummaryWithRisk = {
+    totalValue: 100000,
+    cashBalance: 100000,
+    positionsValue: 0,
+    openPositions: 0,
+    cumulativePnlPct: 0,
+    alpha: 0,
+    maxDrawdown: null,
+    sharpeRatio: null,
+    winRate: null,
+  };
+
   try {
     const supabase = getSupabase();
     const { data } = await supabase
@@ -566,16 +714,7 @@ export async function getPortfolioSummary(strategyMode: string): Promise<{
       .limit(1)
       .single();
 
-    if (!data) {
-      return {
-        totalValue: 100000,
-        cashBalance: 100000,
-        positionsValue: 0,
-        openPositions: 0,
-        cumulativePnlPct: 0,
-        alpha: 0,
-      };
-    }
+    if (!data) return defaults;
 
     return {
       totalValue: data.total_value || 100000,
@@ -584,17 +723,13 @@ export async function getPortfolioSummary(strategyMode: string): Promise<{
       openPositions: data.open_positions || 0,
       cumulativePnlPct: data.cumulative_pnl_pct || 0,
       alpha: data.alpha || 0,
+      maxDrawdown: data.max_drawdown ?? null,
+      sharpeRatio: data.sharpe_ratio ?? null,
+      winRate: data.win_rate ?? null,
     };
   } catch (error) {
     console.error('getPortfolioSummary error:', error);
-    return {
-      totalValue: 100000,
-      cashBalance: 100000,
-      positionsValue: 0,
-      openPositions: 0,
-      cumulativePnlPct: 0,
-      alpha: 0,
-    };
+    return defaults;
   }
 }
 

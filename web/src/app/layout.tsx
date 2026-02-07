@@ -1,47 +1,29 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { NavBar } from '@/components/ui/NavBar';
+import { getTodayBatchStatus } from '@/lib/supabase';
 
 export const metadata: Metadata = {
   title: 'AI Pick Daily',
   description: 'AIによる毎日の株式銘柄レコメンド',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const batchStatus = await getTodayBatchStatus();
+
   return (
     <html lang="ja">
-      <body className="min-h-screen">
-        <header className="bg-white shadow-sm border-b">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold text-primary-700">
-                AI Pick Daily
-              </h1>
-              <nav className="flex gap-6">
-                <a href="/" className="text-gray-600 hover:text-primary-600">
-                  Today
-                </a>
-                <a href="/history" className="text-gray-600 hover:text-primary-600">
-                  History
-                </a>
-                <a href="/performance" className="text-gray-600 hover:text-primary-600">
-                  Performance
-                </a>
-                <a href="/portfolio" className="text-gray-600 hover:text-primary-600">
-                  Portfolio
-                </a>
-              </nav>
-            </div>
-          </div>
-        </header>
-        <main className="max-w-7xl mx-auto px-4 py-8">
+      <body className="min-h-screen bg-surface-secondary">
+        <NavBar systemStatus={batchStatus} />
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
           {children}
         </main>
-        <footer className="border-t mt-12 py-6 text-center text-gray-500 text-sm">
-          <p>AI Pick Daily - Educational purposes only. Not financial advice.</p>
+        <footer className="border-t border-gray-100 mt-12 py-6 text-center text-gray-400 text-xs">
+          AI Pick Daily — Educational purposes only. Not financial advice.
         </footer>
       </body>
     </html>

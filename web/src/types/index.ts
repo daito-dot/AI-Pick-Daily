@@ -78,13 +78,46 @@ export interface PerformanceLog {
   created_at: string;
 }
 
-export interface AILesson {
-  id: string;
-  lesson_date: string;
-  lesson_text: string;
-  biggest_miss_symbols: string[];
-  miss_analysis: string;
-  created_at: string;
+// AILesson is deprecated (replaced by PerformanceStats)
+
+// Portfolio-level AI judgment types
+export type AllocationHint = 'high' | 'normal' | 'low';
+
+export interface StockAllocation {
+  symbol: string;
+  action: 'buy' | 'skip';
+  conviction: number;
+  allocation_hint: AllocationHint;
+  reasoning: string;
+}
+
+// Performance stats (replaces AI Lessons)
+export interface PerformanceStats {
+  buy_count: number;
+  buy_win_count: number;
+  buy_win_rate: number;
+  buy_avg_return: number;
+  avoid_count: number;
+  avoid_correct_count: number;
+  avoid_accuracy: number;
+}
+
+// Factor weights from scoring_config
+export interface FactorWeights {
+  [key: string]: number;
+}
+
+// Extended portfolio summary with risk metrics
+export interface PortfolioSummaryWithRisk {
+  totalValue: number;
+  cashBalance: number;
+  positionsValue: number;
+  openPositions: number;
+  cumulativePnlPct: number;
+  alpha: number;
+  maxDrawdown: number | null;
+  sharpeRatio: number | null;
+  winRate: number | null;
 }
 
 // LLM Judgment types (Layer 2)
