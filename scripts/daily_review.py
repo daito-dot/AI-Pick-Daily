@@ -430,6 +430,15 @@ def main():
         logger.info(f"  Not Picked: {summary.get('not_picked_count', 0)} stocks, avg return: {summary.get('not_picked_avg_return', 0):.2f}%")
         logger.info(f"  Missed Opportunities (>3%): {summary.get('missed_opportunities', 0)}")
 
+    # 7. META-MONITOR: Detect degradation and auto-correct
+    logger.info("Step 7: Running meta-monitor (autonomous improvement)...")
+    from src.meta_monitor import run_meta_monitor
+    for strategy in ["conservative", "aggressive"]:
+        try:
+            run_meta_monitor(supabase, strategy)
+        except Exception as e:
+            logger.error(f"Meta-monitor failed for {strategy}: {e}")
+
     logger.info("=" * 60)
     logger.info("Daily review batch completed")
     logger.info("=" * 60)

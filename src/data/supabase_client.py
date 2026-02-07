@@ -1644,3 +1644,26 @@ class SupabaseClient:
             counts[market] = counts.get(market, 0) + 1
 
         return counts
+
+    # ─── Meta-monitor helpers ──────────────────────────────────
+
+    def get_active_prompt_overrides(self, strategy_mode: str) -> list[dict]:
+        """Get currently active and non-expired prompt overrides for a strategy.
+
+        Used by judgment prompts to inject dynamic guidance.
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            result = (
+                self._client.table("prompt_overrides")
+                .select("id, override_text, reason, expires_at")
+                .eq("strategy_mode", strategy_mode)
+                .eq("active", True)
+                .gt("expires_at", now)
+                .execute()
+            )
+            return result.data or []
+        except Exception:
+            return []

@@ -334,6 +334,11 @@ def run_judgment_for_candidates(
     else:
         target_candidates = candidates
 
+    # Fetch dynamic prompt overrides from meta-monitor (once per batch)
+    prompt_overrides = supabase.get_active_prompt_overrides(strategy_mode)
+    if prompt_overrides:
+        logger.info(f"Loaded {len(prompt_overrides)} active prompt override(s) for {strategy_mode}")
+
     logger.info(f"Running LLM judgment for {len(target_candidates)} {strategy_mode} candidates")
 
     for stock_data, score in target_candidates:
@@ -354,6 +359,7 @@ def run_judgment_for_candidates(
                 rule_based_scores=scores_dict,
                 market_regime=market_regime,
                 past_lessons=past_lessons,
+                prompt_overrides=prompt_overrides,
             )
 
             # Save to database

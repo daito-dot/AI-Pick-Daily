@@ -44,6 +44,7 @@ def build_judgment_prompt(
     rule_based_scores: dict,
     market_regime: str,
     past_lessons: str | None = None,
+    prompt_overrides: list[dict] | None = None,
 ) -> str:
     """
     Build the judgment prompt for a single stock.
@@ -56,6 +57,7 @@ def build_judgment_prompt(
         rule_based_scores: Existing rule-based agent scores
         market_regime: Current market regime
         past_lessons: Optional formatted string of past AI lessons
+        prompt_overrides: Optional dynamic overrides from meta-monitor
 
     Returns:
         Complete prompt string for LLM
@@ -70,8 +72,8 @@ def build_judgment_prompt(
     # Format existing rule-based scores
     scores_info = _format_rule_based_scores(rule_based_scores, strategy_mode)
 
-    # Strategy-specific guidance
-    strategy_guidance = _get_strategy_guidance(strategy_mode)
+    # Strategy-specific guidance (with dynamic overrides from meta-monitor)
+    strategy_guidance = _get_strategy_guidance(strategy_mode, prompt_overrides)
 
     # Past lessons section (optional)
     lessons_section = ""
@@ -282,10 +284,13 @@ def _format_rule_based_scores(scores: dict, strategy_mode: str) -> str:
     return "\n".join(lines)
 
 
-def _get_strategy_guidance(strategy_mode: str) -> str:
-    """Get strategy-specific guidance."""
-    if strategy_mode == "conservative":
-        return """保守的戦略ガイダンス (V1):
+def _get_strategy_guidance(
+    strategy_mode: str,
+    prompt_overrides: list[dict] | None = None,
+) -> str:
+    """Get strategy-specific guidance with optional dynamic overrides."""
+    if strategy_mode == "conservative" or strategy_mode == "jp_conservative":
+        base = """保守的戦略ガイダンス (V1):
 - 安定性と一貫したパフォーマンスを重視
 - 堅実なファンダメンタルズ（P/E、利益率）の銘柄を優先
 - 確認されたトレンドを探す
@@ -293,13 +298,26 @@ def _get_strategy_guidance(strategy_mode: str) -> str:
 - 最小保有期間: 5-10日
 - 目標: 限定的な下落リスクで安定した利益"""
     else:
-        return """積極的戦略ガイダンス (V2):
+        base = """積極的戦略ガイダンス (V2):
 - より高いリスクを許容してより高いリターンを追求
 - モメンタムとブレイクアウトパターンに注目
 - カタリスト（決算、ニュース）は重要なトリガー
 - ボラティリティの高い銘柄も保有可能
 - 短い保有期間も許容（3-5日）
 - 目標: 強い動きを捉える、一部の損失は受容"""
+
+    # Append dynamic overrides from meta-monitor
+    if prompt_overrides:
+        active_texts = [
+            o["override_text"]
+            for o in prompt_overrides
+            if o.get("override_text") and o.get("active", True)
+        ]
+        if active_texts:
+            base += "\n\n## 直近の分析に基づく追加ガイダンス\n"
+            base += "\n".join(f"- {text}" for text in active_texts)
+
+    return base
 
 
 # Prompt for batch processing multiple stocks
@@ -317,6 +335,7 @@ def build_judgment_prompt_v2(
     strategy_mode: str,
     timed_info: "TimedInformation",
     rule_based_scores: dict,
+    prompt_overrides: list[dict] | None = None,
 ) -> str:
     """
     Build judgment prompt using TimedInformation structure.
@@ -328,6 +347,7 @@ def build_judgment_prompt_v2(
         strategy_mode: "conservative" or "aggressive"
         timed_info: Structured TimedInformation from collector
         rule_based_scores: Existing rule-based agent scores
+        prompt_overrides: Optional dynamic prompt overrides from meta-monitor
 
     Returns:
         Complete prompt string for LLM
@@ -347,8 +367,8 @@ def build_judgment_prompt_v2(
     # Data quality notice
     quality_info = _format_data_quality(timed_info)
 
-    # Strategy-specific guidance
-    strategy_guidance = _get_strategy_guidance(strategy_mode)
+    # Strategy-specific guidance (with dynamic overrides from meta-monitor)
+    strategy_guidance = _get_strategy_guidance(strategy_mode, prompt_overrides)
 
     # Market context
     market_info = _format_market_context(timed_info.market)

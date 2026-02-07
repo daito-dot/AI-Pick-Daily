@@ -314,20 +314,30 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_strategy ON portfolio_snapshots(strateg
 -- JUDGMENT RECORDS
 -- ============================================
 
+-- judgment_records: see migration 006 for full schema
 CREATE TABLE IF NOT EXISTS judgment_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    judgment_date DATE NOT NULL,
-    strategy_mode strategy_mode_type NOT NULL,
-    position_action TEXT,
-    symbols_to_buy JSONB DEFAULT '[]',
-    symbols_to_sell JSONB DEFAULT '[]',
-    reasoning TEXT,
-    market_context JSONB,
+    symbol VARCHAR(10) NOT NULL,
+    batch_date DATE NOT NULL,
+    strategy_mode VARCHAR(20) NOT NULL,
+    decision VARCHAR(20) NOT NULL,
+    confidence DECIMAL(5, 4) NOT NULL,
+    score INTEGER NOT NULL,
+    reasoning JSONB NOT NULL,
+    key_factors JSONB NOT NULL DEFAULT '[]',
+    identified_risks JSONB DEFAULT '[]',
+    market_regime VARCHAR(20),
+    composite_score INTEGER,
+    input_summary TEXT,
+    model_version VARCHAR(50),
+    prompt_version VARCHAR(20),
+    raw_llm_response TEXT,
+    judged_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(judgment_date, strategy_mode)
+    market_type VARCHAR(2) DEFAULT 'us'
 );
 
-CREATE INDEX IF NOT EXISTS idx_judgment_date ON judgment_records(judgment_date DESC);
+CREATE INDEX IF NOT EXISTS idx_judgment_batch_date ON judgment_records(batch_date DESC);
 CREATE INDEX IF NOT EXISTS idx_judgment_strategy ON judgment_records(strategy_mode);
 
 -- ============================================
@@ -493,3 +503,80 @@ VALUES
     (CURRENT_DATE, 'conservative', 0.35, 0.35, 0.20, 0.10, 1, 'Initial weights'),
     (CURRENT_DATE, 'aggressive', 0.35, 0.35, 0.20, 0.10, 1, 'Initial weights')
 ON CONFLICT (updated_date, strategy_mode) DO NOTHING;
+
+-- ============================================
+-- META-MONITOR TABLES (016)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS performance_rolling_metrics (
+  id bigserial PRIMARY KEY,
+  strategy_mode text NOT NULL,
+  metric_date date NOT NULL DEFAULT CURRENT_DATE,
+  win_rate_7d numeric,
+  win_rate_30d numeric,
+  avg_return_7d numeric,
+  avg_return_30d numeric,
+  missed_rate_7d numeric,
+  total_judgments_7d integer,
+  total_judgments_30d integer,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE(strategy_mode, metric_date)
+);
+
+CREATE TABLE IF NOT EXISTS meta_interventions (
+  id bigserial PRIMARY KEY,
+  strategy_mode text NOT NULL,
+  intervention_date timestamptz DEFAULT now(),
+  trigger_type text NOT NULL,
+  diagnosis jsonb NOT NULL,
+  actions_taken jsonb NOT NULL,
+  pre_metrics jsonb NOT NULL,
+  post_metrics jsonb,
+  effectiveness_score numeric,
+  rolled_back boolean DEFAULT false,
+  rollback_date timestamptz,
+  cooldown_until timestamptz,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS prompt_overrides (
+  id bigserial PRIMARY KEY,
+  strategy_mode text NOT NULL,
+  override_text text NOT NULL,
+  reason text NOT NULL,
+  intervention_id bigint REFERENCES meta_interventions(id),
+  active boolean DEFAULT true,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE performance_rolling_metrics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meta_interventions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prompt_overrides ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  CREATE POLICY "Allow service role full access on performance_rolling_metrics"
+    ON performance_rolling_metrics FOR ALL USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE POLICY "Allow service role full access on meta_interventions"
+    ON meta_interventions FOR ALL USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE POLICY "Allow service role full access on prompt_overrides"
+    ON prompt_overrides FOR ALL USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_rolling_metrics_strategy_date
+  ON performance_rolling_metrics(strategy_mode, metric_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meta_interventions_strategy_date
+  ON meta_interventions(strategy_mode, intervention_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_overrides_strategy_active
+  ON prompt_overrides(strategy_mode, active) WHERE active = true;

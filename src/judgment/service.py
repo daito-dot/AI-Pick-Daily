@@ -53,6 +53,7 @@ class JudgmentService:
         rule_based_scores: dict,
         market_regime: str = "normal",
         past_lessons: str | None = None,
+        prompt_overrides: list[dict] | None = None,
     ) -> JudgmentOutput:
         """
         Generate an investment judgment for a single stock.
@@ -68,6 +69,7 @@ class JudgmentService:
             rule_based_scores: Existing rule-based agent scores
             market_regime: Current market regime
             past_lessons: Optional formatted past lessons for context
+            prompt_overrides: Optional dynamic overrides from meta-monitor
 
         Returns:
             JudgmentOutput with decision and full reasoning trace
@@ -83,6 +85,7 @@ class JudgmentService:
             rule_based_scores=rule_based_scores,
             market_regime=market_regime,
             past_lessons=past_lessons,
+            prompt_overrides=prompt_overrides,
         )
 
         # Create full prompt with system context
