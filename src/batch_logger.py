@@ -188,8 +188,8 @@ class BatchLogger:
             elif ctx.successful_items == 0 and ctx.failed_items > 0:
                 status = ExecutionStatus.FAILED
             else:
-                # No items processed - still success if no errors
-                status = ExecutionStatus.SUCCESS
+                # No items processed - mark as partial to distinguish from real success
+                status = ExecutionStatus.PARTIAL_SUCCESS
 
             BatchLogger._update_log(ctx, status)
 
@@ -241,8 +241,8 @@ class BatchLogger:
             elif ctx.successful_items == 0 and ctx.failed_items > 0:
                 status = ExecutionStatus.FAILED
             else:
-                # No items processed - still success if no errors
-                status = ExecutionStatus.SUCCESS
+                # No items processed - mark as partial to distinguish from real success
+                status = ExecutionStatus.PARTIAL_SUCCESS
 
             # Update with final status
             BatchLogger._update_log(ctx, status)

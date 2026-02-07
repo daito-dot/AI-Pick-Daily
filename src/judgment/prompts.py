@@ -12,6 +12,7 @@ Based on research findings:
 
 # Version tracking for A/B testing and iteration
 PROMPT_VERSION = "v1"
+PORTFOLIO_PROMPT_VERSION = "v2_portfolio"
 
 
 JUDGMENT_SYSTEM_PROMPT = """あなたは経験豊富な投資アナリストです。株式投資判断を行います。
@@ -638,3 +639,258 @@ def _format_data_quality(timed_info) -> str:
 Data Completeness: {completeness_label} ({completeness:.0%})
 Total News Items: {timed_info.total_news_count}
 Immediate News: {timed_info.immediate_news_count}"""
+
+
+# === Portfolio-Level Judgment ===
+
+
+PORTFOLIO_SYSTEM_PROMPT = """あなたはポートフォリオマネージャーです。
+複数の投資候補を同時に評価し、最適な銘柄の組み合わせを選定します。
+
+重要な原則:
+1. 銘柄間の比較を行い、相対的に最も有望な銘柄を選ぶ
+2. 現在の保有ポジションとの重複・セクター相関を考慮する
+3. 確信度の高い銘柄を優先する
+4. 過去の実績データを参考に判断精度を高める
+5. 情報が不足する場合は保守的に判断する
+
+出力要件:
+- 指定された構造のJSON形式で回答
+- すべてのテキストは日本語で記述"""
+
+
+def build_portfolio_judgment_prompt(
+    strategy_mode: str,
+    market_regime: str,
+    candidates: list,
+    current_positions: list,
+    available_slots: int,
+    available_cash: float,
+    news_by_symbol: dict[str, list[dict]] | None = None,
+    performance_stats: dict | None = None,
+) -> str:
+    """Build prompt for portfolio-level judgment.
+
+    Args:
+        strategy_mode: Strategy mode string
+        market_regime: Current market regime
+        candidates: List of PortfolioCandidateSummary
+        current_positions: List of PortfolioHolding
+        available_slots: Number of open slots
+        available_cash: Available cash amount
+        news_by_symbol: Dict mapping symbol -> list of news dicts
+        performance_stats: Structured performance data from build_performance_stats()
+
+    Returns:
+        Complete prompt string for LLM
+    """
+    strategy_guidance = _get_strategy_guidance(strategy_mode)
+
+    # Current holdings table
+    holdings_section = ""
+    if current_positions:
+        rows = []
+        for pos in current_positions:
+            rows.append(
+                f"| {pos.symbol} | {pos.pnl_pct:+.1f}% | {pos.hold_days}日 |"
+            )
+        holdings_section = f"""## 現在の保有ポジション（{len(current_positions)}銘柄）
+| Symbol | PnL% | 保有日数 |
+|--------|------|----------|
+{chr(10).join(rows)}"""
+    else:
+        holdings_section = "## 現在の保有ポジション\nなし"
+
+    # Candidates table
+    candidate_rows = []
+    for c in candidates:
+        rsi_str = f"{c.rsi:.0f}" if c.rsi is not None else "-"
+        vol_str = f"{c.volume_ratio:.1f}x" if c.volume_ratio is not None else "-"
+        sector_str = c.sector or "-"
+        candidate_rows.append(
+            f"| {c.symbol} | {c.composite_score} | {c.percentile_rank} | "
+            f"{c.price:.2f} | {c.change_pct:+.1f}% | {rsi_str} | "
+            f"{c.key_signal} | {sector_str} |"
+        )
+
+    candidates_section = f"""## 投資候補（{len(candidates)}銘柄）
+| Symbol | Score | Pctile | Price | Chg% | RSI | Signal | Sector |
+|--------|-------|--------|-------|------|-----|--------|--------|
+{chr(10).join(candidate_rows)}"""
+
+    # News section (top candidates only)
+    news_section = ""
+    if news_by_symbol:
+        news_lines = ["## 候補の注目ニュース"]
+        for symbol, news_list in list(news_by_symbol.items())[:10]:
+            for news in news_list[:2]:
+                headline = news.get("headline", "")[:100]
+                sentiment = news.get("sentiment", "")
+                sent_str = f" [{sentiment}]" if sentiment else ""
+                news_lines.append(f"- **{symbol}**: {headline}{sent_str}")
+        if len(news_lines) > 1:
+            news_section = "\n".join(news_lines)
+
+    # Performance stats section
+    perf_section = ""
+    if performance_stats:
+        perf_lines = ["## 過去の判断実績（構造化データ）"]
+        if "buy_count" in performance_stats:
+            win_rate = performance_stats.get("buy_win_rate", 0)
+            avg_ret = performance_stats.get("buy_avg_return", 0)
+            perf_lines.append(
+                f"- Buy判断: {performance_stats['buy_count']}件中"
+                f"{performance_stats.get('buy_win_count', 0)}件が利益"
+                f"（勝率{win_rate:.1f}%、平均リターン{avg_ret:+.2f}%）"
+            )
+        if "avoid_count" in performance_stats:
+            accuracy = performance_stats.get("avoid_accuracy", 0)
+            perf_lines.append(
+                f"- Avoid判断: {performance_stats['avoid_count']}件中"
+                f"{performance_stats.get('avoid_correct_count', 0)}件が正解"
+                f"（精度{accuracy:.1f}%）"
+            )
+        if len(perf_lines) > 1:
+            perf_section = "\n".join(perf_lines)
+
+    prompt = f"""# ポートフォリオ判断リクエスト
+
+## 市場環境
+- マーケットレジーム: {market_regime}
+- 戦略: {strategy_mode}
+- 投資枠: {available_slots}枠
+- 利用可能資金: {available_cash:,.0f}
+
+{holdings_section}
+
+{candidates_section}
+
+{news_section}
+
+{perf_section}
+
+## 戦略ガイダンス
+{strategy_guidance}
+
+## タスク
+上記候補を比較し、最大{available_slots}銘柄の買い推奨を確信度順に選定してください。
+
+判断のポイント:
+1. 候補同士を比較して相対的な魅力度を評価
+2. 現在の保有銘柄とのセクター分散を考慮
+3. 確信度が低い銘柄は無理に買わない（0枠推奨も可）
+4. 各銘柄の推奨理由を具体的に説明
+
+## 出力フォーマット (JSON) - 日本語で記述
+
+```json
+{{
+  "recommended_buys": [
+    {{
+      "symbol": "AAPL",
+      "action": "buy",
+      "conviction": 0.85,
+      "allocation_hint": "high",
+      "reasoning": "買い推奨の理由..."
+    }}
+  ],
+  "skipped": [
+    {{
+      "symbol": "TSLA",
+      "action": "skip",
+      "conviction": 0.0,
+      "allocation_hint": "normal",
+      "reasoning": "見送り理由..."
+    }}
+  ],
+  "portfolio_reasoning": "ポートフォリオ全体の判断理由...",
+  "risk_assessment": "全体リスク評価..."
+}}
+```
+
+JSONオブジェクトのみを返してください。追加テキストは不要です。"""
+
+    return prompt
+
+
+# === Exit Judgment ===
+
+EXIT_SYSTEM_PROMPT = """あなたは売却判断の専門家です。
+保有ポジションについて、売却すべきか保持すべきかを判断します。
+
+重要な原則:
+1. 利益が出ている銘柄はモメンタムが続く限り保持を優先
+2. ただし、反転シグナルがあれば利確も推奨
+3. スコアが下がった銘柄でも、ニュースやカタリストがあれば保持を検討
+4. 保有期間が長い銘柄は、明確な理由がなければ売却を推奨
+
+出力要件:
+- 指定された構造のJSON形式で回答
+- すべてのテキストは日本語で記述"""
+
+
+def build_exit_judgment_prompt(
+    positions_for_review: list[dict],
+    market_regime: str,
+) -> str:
+    """Build prompt for exit judgment on multiple positions.
+
+    Args:
+        positions_for_review: List of dicts with position info + trigger reason
+        market_regime: Current market regime
+
+    Returns:
+        Complete prompt string
+    """
+    position_rows = []
+    for p in positions_for_review:
+        news_str = ""
+        if p.get("top_news"):
+            news_str = f" | ニュース: {p['top_news'][:80]}"
+        position_rows.append(
+            f"- **{p['symbol']}**: PnL {p['pnl_pct']:+.1f}%, "
+            f"保有{p['hold_days']}日, トリガー: {p['trigger_reason']}"
+            f"{news_str}"
+        )
+
+    prompt = f"""# 売却判断リクエスト
+
+## 市場環境
+- マーケットレジーム: {market_regime}
+
+## 判断対象ポジション
+以下のポジションについて、ルールベースの売却シグナルが出ていますが、
+AI判断で保持を延長すべきかを評価してください。
+
+{chr(10).join(position_rows)}
+
+## 判断基準
+- take_profit: +15%以上の利益。モメンタムが継続しているなら保持延長も可
+- score_drop: スコアが閾値以下に低下。ニュースやカタリストで回復の見込みがあるか
+- max_hold: 保有10日超。明確なカタリスト待ちでなければ売却推奨
+
+## 制約
+- 保持延長は最大5日（合計15日で強制売却）
+- 不確実な場合は売却を推奨（リスク回避）
+
+## 出力フォーマット (JSON)
+
+```json
+{{
+  "exit_decisions": [
+    {{
+      "symbol": "AAPL",
+      "decision": "close" | "hold",
+      "confidence": 0.0 to 1.0,
+      "reasoning": "判断理由...",
+      "hold_duration_hint": null | 1-5,
+      "risks_of_holding": ["リスク1"],
+      "risks_of_closing": ["リスク1"]
+    }}
+  ]
+}}
+```
+
+JSONオブジェクトのみを返してください。"""
+
+    return prompt

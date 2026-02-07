@@ -13,7 +13,11 @@ from src.data.finnhub_client import FinnhubClient, NewsItem
 from src.data.supabase_client import SupabaseClient
 from src.utils.technical import calculate_rsi
 from .service import JudgmentService
-from .models import JudgmentOutput, KeyFactor, ReasoningTrace
+from .models import (
+    JudgmentOutput, KeyFactor, ReasoningTrace,
+    PortfolioCandidateSummary, PortfolioHolding,
+    PortfolioJudgmentOutput, StockAllocation,
+)
 
 
 @runtime_checkable
@@ -465,3 +469,185 @@ def select_final_picks(
         min_rule_score=min_rule_score,
         min_confidence=min_confidence,
     )
+
+
+def _build_candidate_summary(
+    stock_data: StockDataLike,
+    score: ScoredStockLike,
+) -> PortfolioCandidateSummary:
+    """Convert stock data + score into a PortfolioCandidateSummary."""
+    prices = stock_data.prices or []
+    volumes = stock_data.volumes or []
+
+    current_price = prices[-1] if prices else 0
+    change_pct = 0.0
+    if len(prices) >= 2 and prices[-2] > 0:
+        change_pct = ((prices[-1] - prices[-2]) / prices[-2]) * 100
+
+    rsi = None
+    if len(prices) >= 15:
+        rsi = calculate_rsi(prices, 14)
+
+    avg_volume = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else (
+        sum(volumes) / len(volumes) if volumes else 0
+    )
+    volume_ratio = (volumes[-1] / avg_volume) if (volumes and avg_volume > 0) else None
+
+    # Determine key signal
+    key_signal = "NEUTRAL"
+    breakout_score = getattr(score, "breakout_score", None)
+    if breakout_score is not None and breakout_score >= 70:
+        key_signal = "BREAKOUT"
+    elif rsi is not None and rsi < 30:
+        key_signal = "OVERSOLD"
+    elif rsi is not None and rsi > 70:
+        key_signal = "OVERBOUGHT"
+    elif score.momentum_score >= 70:
+        key_signal = "MOMENTUM"
+
+    return PortfolioCandidateSummary(
+        symbol=stock_data.symbol,
+        composite_score=score.composite_score,
+        percentile_rank=score.percentile_rank,
+        price=current_price,
+        change_pct=change_pct,
+        rsi=rsi,
+        volume_ratio=volume_ratio,
+        key_signal=key_signal,
+        top_news_headline=None,
+        news_sentiment=None,
+        sector=None,
+    )
+
+
+def run_portfolio_judgment(
+    judgment_service: JudgmentService,
+    supabase: SupabaseClient,
+    candidates: list[tuple[StockDataLike, ScoredStockLike]],
+    strategy_mode: str,
+    market_regime: str,
+    batch_date: str,
+    current_positions: list,
+    available_slots: int,
+    available_cash: float,
+    finnhub: FinnhubClient | None = None,
+    yfinance: "YFinanceClient | None" = None,
+    performance_stats: dict | None = None,
+) -> PortfolioJudgmentOutput:
+    """Run portfolio-level judgment on all candidates at once.
+
+    Transforms raw data into PortfolioCandidateSummary objects, fetches news
+    for top candidates, calls judge_portfolio(), and saves individual
+    judgment records for outcome tracking.
+
+    No fallback: exceptions propagate to caller.
+
+    Args:
+        judgment_service: JudgmentService instance
+        supabase: Supabase client
+        candidates: List of (StockDataLike, ScoredStockLike) tuples
+        strategy_mode: Strategy mode string
+        market_regime: Current regime string
+        batch_date: Date string
+        current_positions: Open positions as PortfolioHolding list
+        available_slots: Number of open slots
+        available_cash: Available cash amount
+        finnhub: Optional Finnhub client for news
+        yfinance: Optional yfinance client for news
+        performance_stats: Structured performance data
+
+    Returns:
+        PortfolioJudgmentOutput
+
+    Raises:
+        Exception: Any LLM or parsing error (no fallback)
+    """
+    # Build candidate summaries
+    summaries = []
+    for stock_data, score in candidates:
+        summaries.append(_build_candidate_summary(stock_data, score))
+
+    # Fetch news for top candidates (by score)
+    top_symbols = [s.symbol for s in sorted(summaries, key=lambda x: x.composite_score, reverse=True)[:10]]
+    news_by_symbol: dict[str, list[dict]] = {}
+    for symbol in top_symbols:
+        news = fetch_news_for_judgment(finnhub, symbol, yfinance=yfinance)
+        if news:
+            news_by_symbol[symbol] = news[:3]
+            # Inject top headline into candidate summary
+            for s in summaries:
+                if s.symbol == symbol:
+                    s.top_news_headline = news[0].get("headline", "")[:100]
+                    s.news_sentiment = news[0].get("sentiment")
+                    break
+
+    # Call portfolio-level judgment
+    result = judgment_service.judge_portfolio(
+        strategy_mode=strategy_mode,
+        market_regime=market_regime,
+        candidates=summaries,
+        current_positions=current_positions,
+        available_slots=available_slots,
+        available_cash=available_cash,
+        news_by_symbol=news_by_symbol,
+        performance_stats=performance_stats,
+    )
+
+    # Save individual judgment records for each recommended buy
+    # (needed for judgment_outcomes feedback loop)
+    for alloc in result.recommended_buys:
+        _save_portfolio_allocation_as_judgment(
+            supabase, alloc, strategy_mode, market_regime, batch_date,
+            decision="buy", portfolio_reasoning=result.portfolio_reasoning,
+        )
+
+    for alloc in result.skipped:
+        _save_portfolio_allocation_as_judgment(
+            supabase, alloc, strategy_mode, market_regime, batch_date,
+            decision="avoid", portfolio_reasoning=result.portfolio_reasoning,
+        )
+
+    return result
+
+
+def _save_portfolio_allocation_as_judgment(
+    supabase: SupabaseClient,
+    alloc: StockAllocation,
+    strategy_mode: str,
+    market_regime: str,
+    batch_date: str,
+    decision: str,
+    portfolio_reasoning: str,
+) -> None:
+    """Save a portfolio allocation as a judgment record for outcome tracking."""
+    market_type = "jp" if strategy_mode.startswith("jp_") else "us"
+
+    reasoning_dict = {
+        "steps": [alloc.reasoning],
+        "top_factors": [f"Portfolio-level: {alloc.allocation_hint}"],
+        "decision_point": portfolio_reasoning[:200],
+        "uncertainties": [],
+        "confidence_explanation": f"Conviction: {alloc.conviction:.0%}",
+    }
+
+    try:
+        supabase.save_judgment_record(
+            symbol=alloc.symbol,
+            batch_date=batch_date,
+            strategy_mode=strategy_mode,
+            decision=decision,
+            confidence=alloc.conviction,
+            score=int(alloc.conviction * 100),
+            reasoning=reasoning_dict,
+            key_factors=[],
+            identified_risks=[],
+            market_regime=market_regime,
+            input_summary=f"Portfolio judgment: {alloc.action} ({alloc.allocation_hint})",
+            model_version="",
+            prompt_version="v2_portfolio",
+            raw_llm_response=None,
+            judged_at=datetime.now().isoformat(),
+            market_type=market_type,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save judgment record for {alloc.symbol}: {e}")

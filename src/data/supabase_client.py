@@ -1360,6 +1360,27 @@ class SupabaseClient:
             logger.warning(f"Failed to fetch ai_lessons: {e}")
             return []
 
+    def get_latest_weekly_research(self) -> dict[str, Any] | None:
+        """Get the most recent weekly research report for judgment context.
+
+        Returns:
+            Dict with external_findings, system_data, batch_date or None
+        """
+        try:
+            result = self._client.table("research_logs").select(
+                "external_findings, system_data, batch_date"
+            ).eq(
+                "research_type", "market"
+            ).order(
+                "batch_date", desc=True
+            ).limit(1).execute()
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to fetch weekly research: {e}")
+            return None
+
     def save_reflection_record(
         self,
         reflection_date: str,

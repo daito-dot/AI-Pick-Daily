@@ -11,8 +11,16 @@ from typing import Any
 
 from src.llm import get_llm_client, LLMClient
 from src.config import config
-from .models import JudgmentOutput, ReasoningTrace, KeyFactor
-from .prompts import JUDGMENT_SYSTEM_PROMPT, build_judgment_prompt, PROMPT_VERSION
+from .models import (
+    JudgmentOutput, ReasoningTrace, KeyFactor,
+    PortfolioJudgmentOutput, StockAllocation,
+    ExitJudgmentOutput,
+)
+from .prompts import (
+    JUDGMENT_SYSTEM_PROMPT, build_judgment_prompt, PROMPT_VERSION,
+    PORTFOLIO_SYSTEM_PROMPT, build_portfolio_judgment_prompt, PORTFOLIO_PROMPT_VERSION,
+    EXIT_SYSTEM_PROMPT, build_exit_judgment_prompt,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -283,6 +291,205 @@ class JudgmentService:
             model_version="fallback",
             prompt_version=PROMPT_VERSION,
         )
+
+    def judge_portfolio(
+        self,
+        strategy_mode: str,
+        market_regime: str,
+        candidates: list,
+        current_positions: list,
+        available_slots: int,
+        available_cash: float,
+        news_by_symbol: dict[str, list[dict]] | None = None,
+        performance_stats: dict | None = None,
+    ) -> PortfolioJudgmentOutput:
+        """Generate portfolio-level judgment for all candidates at once.
+
+        Unlike judge_stock() which evaluates one stock at a time, this method
+        sees ALL candidates simultaneously for comparative evaluation.
+
+        No fallback: if LLM fails, exception propagates to caller.
+
+        Args:
+            strategy_mode: Strategy mode string
+            market_regime: Current market regime
+            candidates: List of PortfolioCandidateSummary
+            current_positions: List of PortfolioHolding
+            available_slots: Number of open investment slots
+            available_cash: Available cash amount
+            news_by_symbol: Dict mapping symbol -> list of news dicts
+            performance_stats: Structured data from build_performance_stats()
+
+        Returns:
+            PortfolioJudgmentOutput with buy recommendations and reasoning
+
+        Raises:
+            ValueError: If LLM response cannot be parsed
+            Exception: Any LLM communication error (no fallback)
+        """
+        logger.info(
+            f"Generating portfolio judgment for {len(candidates)} candidates "
+            f"({strategy_mode}, {available_slots} slots)"
+        )
+
+        prompt = build_portfolio_judgment_prompt(
+            strategy_mode=strategy_mode,
+            market_regime=market_regime,
+            candidates=candidates,
+            current_positions=current_positions,
+            available_slots=available_slots,
+            available_cash=available_cash,
+            news_by_symbol=news_by_symbol,
+            performance_stats=performance_stats,
+        )
+
+        full_prompt = f"{PORTFOLIO_SYSTEM_PROMPT}\n\n{prompt}"
+
+        response = self.llm_client.generate_with_thinking(
+            prompt=full_prompt,
+            model=self.model_name,
+            thinking_level="low",
+        )
+
+        logger.debug(f"Portfolio judgment response: {len(response.content)} chars")
+
+        result = self._parse_portfolio_response(response.content)
+        result.raw_llm_response = response.content
+
+        logger.info(
+            f"Portfolio judgment: {len(result.recommended_buys)} buys, "
+            f"{len(result.skipped)} skipped"
+        )
+
+        return result
+
+    def _parse_portfolio_response(self, response: str) -> PortfolioJudgmentOutput:
+        """Parse LLM response into PortfolioJudgmentOutput."""
+        cleaned = response.strip()
+        if "```json" in cleaned:
+            start = cleaned.find("```json") + 7
+            end = cleaned.find("```", start)
+            cleaned = cleaned[start:end].strip()
+        elif "```" in cleaned:
+            start = cleaned.find("```") + 3
+            end = cleaned.find("```", start)
+            cleaned = cleaned[start:end].strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in portfolio judgment response: {e}")
+
+        recommended_buys = []
+        for item in data.get("recommended_buys", []):
+            recommended_buys.append(StockAllocation(
+                symbol=item.get("symbol", ""),
+                action=item.get("action", "buy"),
+                conviction=float(item.get("conviction", 0.5)),
+                allocation_hint=item.get("allocation_hint", "normal"),
+                reasoning=item.get("reasoning", ""),
+            ))
+
+        skipped = []
+        for item in data.get("skipped", []):
+            skipped.append(StockAllocation(
+                symbol=item.get("symbol", ""),
+                action=item.get("action", "skip"),
+                conviction=float(item.get("conviction", 0.0)),
+                allocation_hint=item.get("allocation_hint", "normal"),
+                reasoning=item.get("reasoning", ""),
+            ))
+
+        return PortfolioJudgmentOutput(
+            recommended_buys=recommended_buys,
+            skipped=skipped,
+            portfolio_reasoning=data.get("portfolio_reasoning", ""),
+            risk_assessment=data.get("risk_assessment", ""),
+            prompt_version=PORTFOLIO_PROMPT_VERSION,
+        )
+
+    def judge_exits(
+        self,
+        positions_for_review: list[dict],
+        market_regime: str,
+    ) -> list[ExitJudgmentOutput]:
+        """Generate exit judgments for positions with soft exit signals.
+
+        Batch processes multiple positions in a single LLM call.
+        No fallback: exceptions propagate to caller.
+
+        Args:
+            positions_for_review: List of dicts with symbol, pnl_pct,
+                hold_days, trigger_reason, top_news
+            market_regime: Current market regime
+
+        Returns:
+            List of ExitJudgmentOutput
+
+        Raises:
+            ValueError: If LLM response cannot be parsed
+            Exception: Any LLM communication error
+        """
+        if not positions_for_review:
+            return []
+
+        logger.info(f"Generating exit judgment for {len(positions_for_review)} positions")
+
+        prompt = build_exit_judgment_prompt(
+            positions_for_review=positions_for_review,
+            market_regime=market_regime,
+        )
+
+        full_prompt = f"{EXIT_SYSTEM_PROMPT}\n\n{prompt}"
+
+        response = self.llm_client.generate_with_thinking(
+            prompt=full_prompt,
+            model=self.model_name,
+            thinking_level="low",
+        )
+
+        results = self._parse_exit_response(response.content)
+
+        for r in results:
+            r.raw_llm_response = response.content
+
+        logger.info(
+            f"Exit judgment: {sum(1 for r in results if r.decision == 'close')} close, "
+            f"{sum(1 for r in results if r.decision == 'hold')} hold"
+        )
+
+        return results
+
+    def _parse_exit_response(self, response: str) -> list[ExitJudgmentOutput]:
+        """Parse LLM response into list of ExitJudgmentOutput."""
+        cleaned = response.strip()
+        if "```json" in cleaned:
+            start = cleaned.find("```json") + 7
+            end = cleaned.find("```", start)
+            cleaned = cleaned[start:end].strip()
+        elif "```" in cleaned:
+            start = cleaned.find("```") + 3
+            end = cleaned.find("```", start)
+            cleaned = cleaned[start:end].strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in exit judgment response: {e}")
+
+        results = []
+        for item in data.get("exit_decisions", []):
+            results.append(ExitJudgmentOutput(
+                symbol=item.get("symbol", ""),
+                decision=item.get("decision", "close"),
+                confidence=float(item.get("confidence", 0.5)),
+                reasoning=item.get("reasoning", ""),
+                hold_duration_hint=item.get("hold_duration_hint"),
+                risks_of_holding=item.get("risks_of_holding", []),
+                risks_of_closing=item.get("risks_of_closing", []),
+            ))
+
+        return results
 
     def _create_input_summary(self, stock_data: dict) -> str:
         """Create a brief summary of input data for record-keeping."""

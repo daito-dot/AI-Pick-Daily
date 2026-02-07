@@ -10,11 +10,12 @@ from src.config import config
 from src.batch_logger import BatchLogger, BatchType
 from src.judgment import (
     JudgmentService,
-    run_judgment_for_candidates,
-    select_final_picks,
+    PortfolioHolding,
+    run_portfolio_judgment,
 )
 from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.pipeline.market_config import MarketConfig
+from src.pipeline.review import build_performance_stats
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,30 @@ def load_dynamic_thresholds(
         return None, None
 
 
+def load_factor_weights(
+    supabase,
+    market_config: MarketConfig,
+) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+    """Load dynamic factor weights from scoring_config table.
+
+    Returns:
+        (v1_weights, v2_weights) - None values mean use defaults
+    """
+    try:
+        v1_config = supabase.get_scoring_config(market_config.v1_strategy_mode)
+        v2_config = supabase.get_scoring_config(market_config.v2_strategy_mode)
+        v1_weights = v1_config.get("factor_weights") if v1_config else None
+        v2_weights = v2_config.get("factor_weights") if v2_config else None
+        if v1_weights:
+            logger.info(f"DB factor weights V1: {v1_weights}")
+        if v2_weights:
+            logger.info(f"DB factor weights V2: {v2_weights}")
+        return v1_weights, v2_weights
+    except Exception as e:
+        logger.warning(f"Failed to fetch factor weights, using defaults: {e}")
+        return None, None
+
+
 def run_llm_judgment_phase(
     dual_result,
     v1_stocks_data: list,
@@ -61,10 +86,16 @@ def run_llm_judgment_phase(
     finnhub=None,
     yfinance=None,
     supabase=None,
+    portfolio=None,
 ) -> tuple[list[str], list[str], JudgmentStats]:
-    """Run LLM judgment on threshold-passed candidates and select final picks.
+    """Run portfolio-level LLM judgment on threshold-passed candidates.
 
-    This is the Layer 2 of the 4-layer architecture, shared between US and JP.
+    Uses a single LLM call per strategy to evaluate all candidates
+    simultaneously, enabling comparative evaluation and portfolio-aware
+    decision making.
+
+    No fallback: if LLM fails, exception propagates to caller.
+    Set config.llm.enable_judgment = false to use rule-based only (intentional).
 
     Returns:
         (v1_final_picks, v2_final_picks, judgment_stats)
@@ -78,23 +109,18 @@ def run_llm_judgment_phase(
         logger.info("LLM judgment disabled, using rule-based picks only")
         return v1_final_picks, v2_final_picks, stats
 
-    judgment_ctx = None
-    try:
-        judgment_ctx = BatchLogger.start(
-            BatchType.LLM_JUDGMENT,
-            model=config.llm.analysis_model,
-        )
-        judgment_service = JudgmentService()
+    judgment_ctx = BatchLogger.start(
+        BatchType.LLM_JUDGMENT,
+        model=config.llm.analysis_model,
+    )
 
-        # Fetch past lessons for context injection
-        past_lessons_text = None
-        if supabase:
-            past_lessons_text = _format_past_lessons(supabase, market_config)
+    try:
+        judgment_service = JudgmentService()
 
         v1_min_score = v1_threshold if v1_threshold is not None else config.strategy.v1_min_score
         v2_min_score = v2_threshold if v2_threshold is not None else config.strategy.v2_min_score
 
-        # Filter candidates by threshold
+        # Filter candidates by threshold (safety valve — AI can't buy sub-threshold stocks)
         v1_passed_symbols = get_threshold_passed_symbols(dual_result.v1_scores, v1_min_score)
         v2_passed_symbols = get_threshold_passed_symbols(dual_result.v2_scores, v2_min_score)
 
@@ -114,91 +140,121 @@ def run_llm_judgment_phase(
             for sd in v2_stocks_data if sd.symbol in v2_passed_symbols
         ]
 
-        # Judgment kwargs (finnhub for US, yfinance for JP)
-        judgment_kwargs = {}
-        if finnhub is not None:
-            judgment_kwargs["finnhub"] = finnhub
+        # Get portfolio state for context
+        v1_positions = _get_portfolio_holdings(portfolio, market_config.v1_strategy_mode)
+        v2_positions = _get_portfolio_holdings(portfolio, market_config.v2_strategy_mode)
+
+        max_positions = config.strategy.max_positions if hasattr(config.strategy, "max_positions") else 5
+        v1_slots = max(0, max_positions - len(v1_positions))
+        v2_slots = max(0, max_positions - len(v2_positions))
+
+        # Build structured performance stats (Phase 4)
+        v1_perf_stats = None
+        v2_perf_stats = None
+        if supabase:
+            v1_perf_stats = build_performance_stats(supabase, market_config.v1_strategy_mode)
+            v2_perf_stats = build_performance_stats(supabase, market_config.v2_strategy_mode)
+
+        total_candidates = len(v1_candidates) + len(v2_candidates)
+
+        # Run V1 portfolio judgment
+        v1_final_picks = []
+        if v1_candidates and v1_slots > 0:
+            v1_result = run_portfolio_judgment(
+                judgment_service=judgment_service,
+                supabase=supabase,
+                candidates=v1_candidates,
+                strategy_mode=market_config.v1_strategy_mode,
+                market_regime=market_regime_str,
+                batch_date=today,
+                current_positions=v1_positions,
+                available_slots=v1_slots,
+                available_cash=100000,  # Paper trading nominal
+                finnhub=finnhub,
+                yfinance=yfinance,
+                performance_stats=v1_perf_stats,
+            )
+            # Safety valve: only accept AI recommendations that passed threshold
+            v1_final_picks = [
+                r.symbol for r in v1_result.recommended_buys
+                if r.symbol in v1_passed_symbols
+            ][:max_picks]
+            logger.info(f"V1 portfolio judgment: {v1_final_picks} (reasoning: {v1_result.portfolio_reasoning[:100]})")
         else:
-            judgment_kwargs["finnhub"] = None
-        if yfinance is not None:
-            judgment_kwargs["yfinance"] = yfinance
+            logger.info(f"V1 skipped: {len(v1_candidates)} candidates, {v1_slots} slots")
 
-        # Run V1 judgments
-        v1_judgment_result = run_judgment_for_candidates(
-            judgment_service=judgment_service,
-            supabase=supabase,
-            candidates=v1_candidates,
-            strategy_mode=market_config.v1_strategy_mode,
-            market_regime=market_regime_str,
-            batch_date=today,
-            top_n=None,
-            past_lessons=past_lessons_text,
-            **judgment_kwargs,
-        )
-
-        v1_final_picks = select_final_picks(
-            scores=dual_result.v1_scores,
-            judgments=v1_judgment_result.successful,
-            max_picks=max_picks,
-            min_rule_score=v1_min_score,
-            min_confidence=0.6,
-        )
-
-        if v1_judgment_result.failed:
-            logger.warning(
-                f"V1 judgment failures ({v1_judgment_result.failure_count}): "
-                f"{[(sym, err[:50]) for sym, err in v1_judgment_result.failed]}"
-            )
-
-        # Run V2 judgments
-        v2_judgment_result = run_judgment_for_candidates(
-            judgment_service=judgment_service,
-            supabase=supabase,
-            candidates=v2_candidates,
-            strategy_mode=market_config.v2_strategy_mode,
-            market_regime=market_regime_str,
-            batch_date=today,
-            top_n=None,
-            past_lessons=past_lessons_text,
-            **judgment_kwargs,
-        )
-
+        # Run V2 portfolio judgment
+        v2_final_picks = []
         v2_max_picks = config.strategy.v2_max_picks if max_picks > 0 else 0
-        v2_final_picks = select_final_picks(
-            scores=dual_result.v2_scores,
-            judgments=v2_judgment_result.successful,
-            max_picks=v2_max_picks,
-            min_rule_score=v2_min_score,
-            min_confidence=0.5,
-        )
-
-        if v2_judgment_result.failed:
-            logger.warning(
-                f"V2 judgment failures ({v2_judgment_result.failure_count}): "
-                f"{[(sym, err[:50]) for sym, err in v2_judgment_result.failed]}"
+        if v2_candidates and v2_slots > 0:
+            v2_result = run_portfolio_judgment(
+                judgment_service=judgment_service,
+                supabase=supabase,
+                candidates=v2_candidates,
+                strategy_mode=market_config.v2_strategy_mode,
+                market_regime=market_regime_str,
+                batch_date=today,
+                current_positions=v2_positions,
+                available_slots=v2_slots,
+                available_cash=100000,
+                finnhub=finnhub,
+                yfinance=yfinance,
+                performance_stats=v2_perf_stats,
             )
+            v2_final_picks = [
+                r.symbol for r in v2_result.recommended_buys
+                if r.symbol in v2_passed_symbols
+            ][:v2_max_picks]
+            logger.info(f"V2 portfolio judgment: {v2_final_picks} (reasoning: {v2_result.portfolio_reasoning[:100]})")
+        else:
+            logger.info(f"V2 skipped: {len(v2_candidates)} candidates, {v2_slots} slots")
 
         logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
         logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
 
-        # Track judgment results
-        stats.total_candidates = len(v1_candidates) + len(v2_candidates)
-        stats.successful_judgments = v1_judgment_result.success_count + v2_judgment_result.success_count
-        stats.failed_judgments = v1_judgment_result.failure_count + v2_judgment_result.failure_count
-
+        stats.total_candidates = total_candidates
+        stats.successful_judgments = total_candidates  # Portfolio judgment is all-or-nothing
         judgment_ctx.successful_items = stats.successful_judgments
         judgment_ctx.total_items = stats.total_candidates
-        judgment_ctx.failed_items = stats.failed_judgments
         BatchLogger.finish(judgment_ctx)
 
     except Exception as e:
-        logger.error(f"LLM judgment failed, using rule-based picks: {e}")
-        if judgment_ctx is not None:
-            BatchLogger.finish(judgment_ctx, error=str(e))
-        v1_final_picks = dual_result.v1_picks
-        v2_final_picks = dual_result.v2_picks
+        # No fallback: propagate error after logging
+        logger.error(f"LLM judgment failed: {e}")
+        BatchLogger.finish(judgment_ctx, error=str(e))
+        raise
 
     return v1_final_picks, v2_final_picks, stats
+
+
+def _get_portfolio_holdings(portfolio, strategy_mode: str) -> list[PortfolioHolding]:
+    """Get current open positions as PortfolioHolding list."""
+    if portfolio is None:
+        return []
+
+    try:
+        from datetime import datetime, timezone
+        positions = portfolio.get_open_positions(strategy_mode=strategy_mode)
+        holdings = []
+        today = datetime.now(timezone.utc)
+        for pos in positions:
+            entry_date_str = pos.entry_date if isinstance(pos.entry_date, str) else pos.entry_date.strftime("%Y-%m-%d")
+            try:
+                entry_dt = datetime.strptime(entry_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                hold_days = (today - entry_dt).days
+            except (ValueError, TypeError):
+                hold_days = 0
+            holdings.append(PortfolioHolding(
+                symbol=pos.symbol,
+                strategy_mode=pos.strategy_mode,
+                entry_date=entry_date_str,
+                pnl_pct=pos.pnl_pct if hasattr(pos, "pnl_pct") else 0.0,
+                hold_days=hold_days,
+            ))
+        return holdings
+    except Exception as e:
+        logger.warning(f"Failed to get portfolio holdings for {strategy_mode}: {e}")
+        return []
 
 
 def open_positions_and_snapshot(
@@ -255,33 +311,33 @@ def open_positions_and_snapshot(
             logger.error(f"Failed to update snapshot for {strategy}: {e}")
 
 
-def _format_past_lessons(supabase, market_config: MarketConfig) -> str | None:
-    """Fetch and format recent AI lessons for prompt injection."""
+def _format_weekly_research(supabase) -> str | None:
+    """Fetch and format latest weekly research for judgment context."""
     try:
-        lessons = supabase.get_recent_ai_lessons(
-            market_type=market_config.market_type,
-            limit=3,
-        )
-        if not lessons:
+        research = supabase.get_latest_weekly_research()
+        if not research:
             return None
 
-        lines = []
-        for lesson in lessons:
-            date = lesson.get("lesson_date", "?")
-            miss_analysis = lesson.get("miss_analysis", "")
-            if miss_analysis:
-                lines.append(f"[{date}] 見逃し分析: {miss_analysis}")
-            else:
-                text = lesson.get("lesson_text", "")
-                if text:
-                    # Truncate long lessons
-                    lines.append(f"[{date}] {text[:300]}")
-
-        if not lines:
+        findings = research.get("external_findings", "")
+        if not findings:
             return None
 
-        logger.info(f"Injecting {len(lines)} past lessons into judgment prompt")
+        system_data = research.get("system_data") or {}
+        batch_date = research.get("batch_date", "?")
+
+        lines = [f"[Weekly Research {batch_date}]"]
+        # Truncate findings to keep prompt manageable
+        lines.append(findings[:800])
+
+        watch = system_data.get("stocks_to_watch", [])
+        avoid = system_data.get("stocks_to_avoid", [])
+        if watch:
+            lines.append(f"Watch: {', '.join(watch[:10])}")
+        if avoid:
+            lines.append(f"Avoid: {', '.join(avoid[:10])}")
+
+        logger.info(f"Injecting weekly research ({batch_date}) into judgment prompt")
         return "\n".join(lines)
     except Exception as e:
-        logger.warning(f"Failed to format past lessons: {e}")
+        logger.warning(f"Failed to format weekly research: {e}")
         return None

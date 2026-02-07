@@ -337,6 +337,8 @@ def run_dual_scoring(
     market_regime: MarketRegimeResult,
     v1_threshold: int | None = None,
     v2_threshold: int | None = None,
+    v1_factor_weights: dict[str, float] | None = None,
+    v2_factor_weights: dict[str, float] | None = None,
 ) -> DualScoringResult:
     """
     Run both V1 and V2 scoring pipelines.
@@ -347,13 +349,15 @@ def run_dual_scoring(
         market_regime: Current market regime
         v1_threshold: Optional dynamic threshold for V1 (from DB). Falls back to config if None.
         v2_threshold: Optional dynamic threshold for V2 (from DB). Falls back to config if None.
+        v1_factor_weights: Optional DB-loaded factor weights for V1. Falls back to regime-adjusted defaults.
+        v2_factor_weights: Optional DB-loaded factor weights for V2. Falls back to config defaults.
 
     Returns:
         DualScoringResult with both strategies
     """
     strategy_config = config.strategy
-    v1_weights = get_adjusted_weights(market_regime)  # V1 uses regime-adjusted weights
-    v2_weights = strategy_config.v2_weights
+    v1_weights = v1_factor_weights if v1_factor_weights else get_adjusted_weights(market_regime)
+    v2_weights = v2_factor_weights if v2_factor_weights else strategy_config.v2_weights
 
     # Use dynamic thresholds if provided, otherwise fall back to config
     v1_min_score = v1_threshold if v1_threshold is not None else strategy_config.v1_min_score

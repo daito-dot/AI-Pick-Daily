@@ -1,6 +1,8 @@
 """
 Pytest fixtures for AI Pick Daily tests.
 """
+from __future__ import annotations
+
 import pytest
 from dataclasses import dataclass
 from datetime import datetime

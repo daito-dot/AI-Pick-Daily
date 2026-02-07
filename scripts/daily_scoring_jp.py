@@ -40,7 +40,7 @@ from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
 from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
 from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
-from src.pipeline import JP_MARKET, load_dynamic_thresholds, run_llm_judgment_phase, open_positions_and_snapshot
+from src.pipeline import JP_MARKET, load_dynamic_thresholds, load_factor_weights, run_llm_judgment_phase, open_positions_and_snapshot
 
 
 class DataFetchError(Exception):
@@ -518,9 +518,10 @@ def main():
             BatchLogger.finish(batch_ctx, error=error_msg)
             sys.exit(1)
 
-        # Step 3: Fetch dynamic thresholds from database (FEEDBACK LOOP)
-        logger.info("Step 3: Fetching dynamic thresholds from scoring_config...")
+        # Step 3: Fetch dynamic thresholds and factor weights from database (FEEDBACK LOOP)
+        logger.info("Step 3: Fetching dynamic thresholds and factor weights from scoring_config...")
         v1_threshold, v2_threshold = load_dynamic_thresholds(supabase, JP_MARKET)
+        v1_factor_weights, v2_factor_weights = load_factor_weights(supabase, JP_MARKET)
 
         # Step 4: Run dual scoring (V1 Conservative + V2 Aggressive)
         logger.info("Step 4: Running dual scoring pipeline...")
@@ -530,6 +531,8 @@ def main():
             market_regime,
             v1_threshold=v1_threshold,
             v2_threshold=v2_threshold,
+            v1_factor_weights=v1_factor_weights,
+            v2_factor_weights=v2_factor_weights,
         )
 
         logger.info(f"V1 (Conservative) scored: {len(dual_result.v1_scores)} stocks")
@@ -537,9 +540,9 @@ def main():
         logger.info(f"V2 (Aggressive) scored: {len(dual_result.v2_scores)} stocks")
         logger.info(f"V2 picks (rule-based): {dual_result.v2_picks}")
 
-        # Step 4.5: Run LLM Judgment for top candidates (Layer 2)
-        logger.info("Step 4.5: Running LLM judgment for top candidates...")
-        use_llm_judgment = config.llm.enable_judgment
+        # Step 4.5: Run LLM Judgment for top candidates (Layer 2 - Portfolio Level)
+        logger.info("Step 4.5: Running portfolio-level LLM judgment...")
+        portfolio = PortfolioManager(supabase=supabase, finnhub=None, yfinance=yf_client, market_config=JP_MARKET)
 
         v1_final_picks, v2_final_picks, judgment_stats = run_llm_judgment_phase(
             dual_result=dual_result,
@@ -553,6 +556,7 @@ def main():
             max_picks=market_regime.max_picks,
             yfinance=yf_client,
             supabase=supabase,
+            portfolio=portfolio,
         )
         total_successful_judgments = judgment_stats.successful_judgments
         total_failed_judgments = judgment_stats.failed_judgments
@@ -576,7 +580,6 @@ def main():
 
         # Step 6: Paper Trading - Open positions and update snapshots
         logger.info("Step 6: Opening positions for paper trading...")
-        portfolio = PortfolioManager(supabase=supabase, finnhub=None, yfinance=yf_client)
 
         # Get Nikkei 225 daily return for benchmark
         nikkei_daily_pct = None

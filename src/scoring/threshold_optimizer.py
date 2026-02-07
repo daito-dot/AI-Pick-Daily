@@ -27,18 +27,19 @@ logger = logging.getLogger(__name__)
 
 # === OVERFITTING PROTECTION CONSTANTS ===
 # Minimum number of completed trades before allowing threshold adjustments
-# This prevents adjusting based on noise from small sample sizes
-MIN_TRADES_FOR_ADJUSTMENT = 20
+# Relaxed from 20 to allow early-stage learning while still preventing noise
+MIN_TRADES_FOR_ADJUSTMENT = 8
 
 # Minimum days between threshold adjustments (cooldown)
 # Prevents rapid oscillation and allows time for evaluation
-ADJUSTMENT_COOLDOWN_DAYS = 7
+ADJUSTMENT_COOLDOWN_DAYS = 5
 
 # Maximum adjustments per month to limit "strategy shopping"
 MAX_ADJUSTMENTS_PER_MONTH = 4
 
 # Minimum data points (scored stocks with returns) for analysis
-MIN_DATA_POINTS = 50
+# Relaxed from 50 to allow feedback loop to start earlier
+MIN_DATA_POINTS = 20
 
 
 @dataclass

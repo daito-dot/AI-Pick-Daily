@@ -16,6 +16,7 @@ from typing import Any, Literal
 from src.data.supabase_client import SupabaseClient
 from src.data.finnhub_client import FinnhubClient
 from src.data.yfinance_client import YFinanceClient
+from src.pipeline.market_config import MarketConfig, TransactionCostConfig
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ MAX_POSITIONS = 10
 STOP_LOSS_PCT = -7.0
 TAKE_PROFIT_PCT = 15.0
 MAX_HOLD_DAYS = 10
+ABSOLUTE_MAX_HOLD_DAYS = 15  # Hard limit even if AI says hold
 RISK_FREE_RATE = 0.02  # Annual risk-free rate for Sharpe calculation
 
 # Drawdown Management Thresholds
@@ -34,6 +36,24 @@ MDD_STOP_NEW_THRESHOLD = -15.0  # Stop opening new positions
 MDD_CRITICAL_THRESHOLD = -50.0  # Consider closing all positions (was -20, relaxed to allow recovery)
 
 ExitReason = Literal["score_drop", "stop_loss", "take_profit", "max_hold", "regime_change"]
+
+
+def calculate_transaction_cost(
+    trade_value: float,
+    cost_config: TransactionCostConfig | None,
+) -> float:
+    """Calculate total transaction cost for a single trade.
+
+    Returns commission + slippage, respecting min_commission.
+    """
+    if cost_config is None:
+        return 0.0
+    commission = max(
+        trade_value * cost_config.commission_rate,
+        cost_config.min_commission,
+    )
+    slippage = trade_value * cost_config.slippage_rate
+    return commission + slippage
 
 
 @dataclass
@@ -87,10 +107,13 @@ class PortfolioManager:
         supabase: SupabaseClient,
         finnhub: FinnhubClient | None = None,
         yfinance: YFinanceClient | None = None,
+        market_config: MarketConfig | None = None,
     ):
         self.supabase = supabase
         self.finnhub = finnhub
         self.yfinance = yfinance
+        self.market_config = market_config
+        self._txn_costs = market_config.transaction_costs if market_config else None
 
     def get_drawdown_status(self, strategy_mode: str) -> DrawdownStatus:
         """
@@ -527,7 +550,10 @@ class PortfolioManager:
                 logger.warning(f"No price for {symbol}, skipping")
                 continue
 
-            shares = position_size / price
+            # Deduct entry transaction cost from investable amount
+            entry_cost = calculate_transaction_cost(position_size, self._txn_costs)
+            effective_position = position_size - entry_cost
+            shares = effective_position / price
             score = scores.get(symbol)
 
             try:
@@ -541,9 +567,10 @@ class PortfolioManager:
                     entry_score=score,
                 )
                 opened.append(result)
+                cost_msg = f" (txn cost: ¥{entry_cost:.0f})" if entry_cost > 0 else ""
                 logger.info(
                     f"Opened position: {symbol} @ {price:.2f} x {shares:.4f} shares "
-                    f"= ¥{position_size:.0f} ({strategy_mode})"
+                    f"= ¥{position_size:.0f}{cost_msg} ({strategy_mode})"
                 )
             except Exception as e:
                 logger.error(f"Failed to open position for {symbol}: {e}")
@@ -578,28 +605,34 @@ class PortfolioManager:
         current_scores: dict[str, int] | None = None,
         thresholds: dict[str, float] | None = None,
         market_regime: str | None = None,
+        exit_judgments: dict[str, Any] | None = None,
     ) -> list[ExitSignal]:
         """
         Evaluate exit signals for all positions.
 
-        Exit reasons (in priority order):
+        Hard exits (no AI consultation):
         1. Stop Loss (-7%)
-        2. Take Profit (+15%)
-        3. Regime Change (crisis mode)
-        4. Score Drop (below threshold)
-        5. Max Hold (10 days)
+        2. Regime Change (crisis mode)
+        3. Absolute Max Hold (15 days)
+
+        Soft exits (AI can override to hold):
+        4. Take Profit (+15%)
+        5. Score Drop (below threshold)
+        6. Max Hold (10 days)
 
         Args:
             positions: List of open positions
-            current_scores: Dict of symbol -> current score (for re-scoring check)
+            current_scores: Dict of symbol -> current score
             thresholds: Dict of strategy_mode -> threshold
-            market_regime: Current market regime ('normal', 'caution', 'crisis')
+            market_regime: Current market regime
+            exit_judgments: Dict of symbol -> ExitJudgmentOutput from AI
 
         Returns:
             List of exit signals
         """
         exit_signals = []
         thresholds = thresholds or {"conservative": 60, "aggressive": 75}
+        exit_judgments = exit_judgments or {}
 
         for position in positions:
             # Get current price
@@ -613,7 +646,7 @@ class PortfolioManager:
             position.current_price = current_price
             position.current_pnl_pct = pnl_pct
 
-            # Check exit conditions in priority order
+            # === HARD EXITS (no AI override) ===
 
             # 1. Stop Loss
             if pnl_pct <= STOP_LOSS_PCT:
@@ -623,25 +656,10 @@ class PortfolioManager:
                     current_price=current_price,
                     pnl_pct=pnl_pct,
                 ))
-                logger.warning(
-                    f"STOP LOSS triggered: {position.symbol} @ {pnl_pct:.1f}%"
-                )
+                logger.warning(f"STOP LOSS triggered: {position.symbol} @ {pnl_pct:.1f}%")
                 continue
 
-            # 2. Take Profit
-            if pnl_pct >= TAKE_PROFIT_PCT:
-                exit_signals.append(ExitSignal(
-                    position=position,
-                    reason="take_profit",
-                    current_price=current_price,
-                    pnl_pct=pnl_pct,
-                ))
-                logger.info(
-                    f"TAKE PROFIT triggered: {position.symbol} @ {pnl_pct:.1f}%"
-                )
-                continue
-
-            # 3. Regime Change
+            # 2. Regime Change
             if market_regime == "crisis":
                 exit_signals.append(ExitSignal(
                     position=position,
@@ -649,41 +667,119 @@ class PortfolioManager:
                     current_price=current_price,
                     pnl_pct=pnl_pct,
                 ))
-                logger.warning(
-                    f"REGIME CHANGE exit: {position.symbol} (crisis mode)"
-                )
+                logger.warning(f"REGIME CHANGE exit: {position.symbol} (crisis mode)")
                 continue
 
-            # 4. Score Drop
-            if current_scores:
-                current_score = current_scores.get(position.symbol)
-                threshold = thresholds.get(position.strategy_mode, 60)
-                if current_score is not None and current_score < threshold:
-                    exit_signals.append(ExitSignal(
-                        position=position,
-                        reason="score_drop",
-                        current_price=current_price,
-                        pnl_pct=pnl_pct,
-                    ))
-                    logger.info(
-                        f"SCORE DROP exit: {position.symbol} (score={current_score} < {threshold})"
-                    )
-                    continue
-
-            # 5. Max Hold
-            if position.hold_days >= MAX_HOLD_DAYS:
+            # 3. Absolute Max Hold (hard limit, even if AI says hold)
+            if position.hold_days >= ABSOLUTE_MAX_HOLD_DAYS:
                 exit_signals.append(ExitSignal(
                     position=position,
-                    reason="max_hold",
+                    reason="absolute_max_hold",
                     current_price=current_price,
                     pnl_pct=pnl_pct,
                 ))
+                logger.warning(f"ABSOLUTE MAX HOLD exit: {position.symbol} (held {position.hold_days} days)")
+                continue
+
+            # === SOFT EXITS (AI can override) ===
+
+            soft_trigger = None
+
+            # 4. Take Profit
+            if pnl_pct >= TAKE_PROFIT_PCT:
+                soft_trigger = "take_profit"
+
+            # 5. Score Drop
+            elif current_scores:
+                current_score = current_scores.get(position.symbol)
+                threshold = thresholds.get(position.strategy_mode, 60)
+                if current_score is not None and current_score < threshold:
+                    soft_trigger = "score_drop"
+
+            # 6. Max Hold
+            elif position.hold_days >= MAX_HOLD_DAYS:
+                soft_trigger = "max_hold"
+
+            if soft_trigger is None:
+                continue
+
+            # Check AI judgment for override
+            ai_judgment = exit_judgments.get(position.symbol)
+            if ai_judgment and ai_judgment.decision == "hold":
                 logger.info(
-                    f"MAX HOLD exit: {position.symbol} (held {position.hold_days} days)"
+                    f"AI OVERRIDE: {position.symbol} soft exit '{soft_trigger}' → HOLD "
+                    f"(confidence={ai_judgment.confidence:.0%}, reason: {ai_judgment.reasoning[:80]})"
                 )
                 continue
 
+            # No AI override → proceed with exit
+            exit_signals.append(ExitSignal(
+                position=position,
+                reason=soft_trigger,
+                current_price=current_price,
+                pnl_pct=pnl_pct,
+            ))
+            if ai_judgment:
+                logger.info(
+                    f"AI CONFIRMED exit: {position.symbol} '{soft_trigger}' @ {pnl_pct:.1f}% "
+                    f"(confidence={ai_judgment.confidence:.0%})"
+                )
+            else:
+                logger.info(f"SOFT EXIT (no AI): {position.symbol} '{soft_trigger}' @ {pnl_pct:.1f}%")
+
         return exit_signals
+
+    def get_soft_exit_candidates(
+        self,
+        positions: list[Position],
+        current_scores: dict[str, int] | None = None,
+        thresholds: dict[str, float] | None = None,
+        market_regime: str | None = None,
+    ) -> list[dict]:
+        """Identify positions with soft exit triggers for AI consultation.
+
+        Returns list of dicts with position info suitable for AI exit judgment.
+        """
+        candidates = []
+        thresholds = thresholds or {"conservative": 60, "aggressive": 75}
+
+        for position in positions:
+            current_price = self.get_current_price(position.symbol)
+            if not current_price:
+                continue
+
+            pnl_pct = ((current_price - position.entry_price) / position.entry_price) * 100
+
+            # Skip hard exits
+            if pnl_pct <= STOP_LOSS_PCT:
+                continue
+            if market_regime == "crisis":
+                continue
+            if position.hold_days >= ABSOLUTE_MAX_HOLD_DAYS:
+                continue
+
+            # Check soft triggers
+            trigger = None
+            if pnl_pct >= TAKE_PROFIT_PCT:
+                trigger = "take_profit"
+            elif current_scores:
+                current_score = current_scores.get(position.symbol)
+                threshold = thresholds.get(position.strategy_mode, 60)
+                if current_score is not None and current_score < threshold:
+                    trigger = "score_drop"
+            elif position.hold_days >= MAX_HOLD_DAYS:
+                trigger = "max_hold"
+
+            if trigger:
+                candidates.append({
+                    "symbol": position.symbol,
+                    "pnl_pct": pnl_pct,
+                    "hold_days": position.hold_days,
+                    "trigger_reason": trigger,
+                    "top_news": None,  # Caller can enrich with news
+                })
+
+        return candidates
 
     def close_positions(
         self,
@@ -706,8 +802,12 @@ class PortfolioManager:
         for signal in exit_signals:
             position = signal.position
 
-            # Calculate P&L
-            pnl = (signal.current_price - position.entry_price) * position.shares
+            # Calculate P&L with exit transaction cost
+            gross_pnl = (signal.current_price - position.entry_price) * position.shares
+            exit_value = signal.current_price * position.shares
+            exit_cost = calculate_transaction_cost(exit_value, self._txn_costs)
+            pnl = gross_pnl - exit_cost
+            pnl_pct = (pnl / position.position_value) * 100 if position.position_value else signal.pnl_pct
 
             try:
                 # Close position in virtual_portfolio
@@ -717,7 +817,7 @@ class PortfolioManager:
                     exit_price=signal.current_price,
                     exit_reason=signal.reason,
                     realized_pnl=pnl,
-                    realized_pnl_pct=signal.pnl_pct,
+                    realized_pnl_pct=pnl_pct,
                 )
 
                 # Save to trade history
@@ -732,15 +832,16 @@ class PortfolioManager:
                     shares=position.shares,
                     hold_days=position.hold_days,
                     pnl=pnl,
-                    pnl_pct=signal.pnl_pct,
+                    pnl_pct=pnl_pct,
                     exit_reason=signal.reason,
                     market_regime_at_exit=market_regime_at_exit,
                 )
                 trades.append(trade)
 
+                cost_msg = f" txn cost: ¥{exit_cost:.0f}" if exit_cost > 0 else ""
                 logger.info(
                     f"Closed position: {position.symbol} @ {signal.current_price:.2f} "
-                    f"({signal.reason}) P&L: ¥{pnl:.0f} ({signal.pnl_pct:+.1f}%)"
+                    f"({signal.reason}) P&L: ¥{pnl:.0f} ({pnl_pct:+.1f}%){cost_msg}"
                 )
 
             except Exception as e:
@@ -770,12 +871,14 @@ class PortfolioManager:
         # Get open positions
         positions = self.get_open_positions(strategy_mode)
 
-        # Calculate positions value
+        # Calculate positions value (net of potential exit costs)
         positions_value = 0.0
         for pos in positions:
             current_price = self.get_current_price(pos.symbol)
             if current_price:
-                positions_value += current_price * pos.shares
+                gross_value = current_price * pos.shares
+                exit_cost = calculate_transaction_cost(gross_value, self._txn_costs)
+                positions_value += gross_value - exit_cost
             else:
                 positions_value += pos.position_value  # Use entry value as fallback
 
@@ -838,8 +941,14 @@ class PortfolioManager:
         cumulative_pnl = total_value - INITIAL_CAPITAL
         cumulative_pnl_pct = (cumulative_pnl / INITIAL_CAPITAL) * 100
 
-        # Calculate S&P 500 cumulative and alpha
-        sp500_cumulative_pct = prev_sp500_cumulative + (sp500_daily_pct or 0)
+        # Calculate S&P 500 cumulative (compound) and alpha
+        # Use multiplicative compounding to match portfolio's natural compounding
+        if sp500_daily_pct is not None:
+            prev_factor = 1.0 + (prev_sp500_cumulative / 100.0)
+            daily_factor = 1.0 + (sp500_daily_pct / 100.0)
+            sp500_cumulative_pct = (prev_factor * daily_factor - 1.0) * 100.0
+        else:
+            sp500_cumulative_pct = prev_sp500_cumulative
         alpha = cumulative_pnl_pct - sp500_cumulative_pct
 
         # Calculate risk metrics from historical data

@@ -12,6 +12,7 @@ import json
 
 # Type aliases
 JudgmentDecision = Literal["buy", "hold", "avoid"]
+AllocationHint = Literal["high", "normal", "low"]
 FactorType = Literal["fundamental", "technical", "sentiment", "macro", "catalyst"]
 FactorImpact = Literal["positive", "negative", "neutral"]
 
@@ -220,3 +221,71 @@ class JudgmentOutput:
             f"  Risks: {risks_summary}\n"
             f"  Decision point: {self.reasoning.decision_point}"
         )
+
+
+# === Portfolio-Level Judgment Models ===
+
+
+@dataclass
+class PortfolioCandidateSummary:
+    """Summary of a single candidate for portfolio-level judgment."""
+    symbol: str
+    composite_score: int
+    percentile_rank: int
+    price: float
+    change_pct: float
+    rsi: float | None
+    volume_ratio: float | None
+    key_signal: str  # "BREAKOUT", "EARNINGS_BEAT", "OVERSOLD", etc.
+    top_news_headline: str | None
+    news_sentiment: str | None
+    sector: str | None
+
+
+@dataclass
+class PortfolioHolding:
+    """Current holding info for portfolio context."""
+    symbol: str
+    strategy_mode: str
+    entry_date: str
+    pnl_pct: float
+    hold_days: int
+
+
+@dataclass
+class StockAllocation:
+    """LLM's recommendation for a single stock within portfolio context."""
+    symbol: str
+    action: str  # "buy" or "skip"
+    conviction: float  # 0.0-1.0
+    allocation_hint: AllocationHint
+    reasoning: str
+
+
+@dataclass
+class PortfolioJudgmentOutput:
+    """Complete output from portfolio-level judgment."""
+    recommended_buys: list[StockAllocation]
+    skipped: list[StockAllocation]
+    portfolio_reasoning: str
+    risk_assessment: str
+    raw_llm_response: str | None = None
+    prompt_version: str = "v2_portfolio"
+
+
+# === Exit Judgment Models ===
+
+ExitDecision = Literal["close", "hold"]
+
+
+@dataclass
+class ExitJudgmentOutput:
+    """AI judgment on whether to close or hold a position."""
+    symbol: str
+    decision: ExitDecision
+    confidence: float  # 0.0-1.0
+    reasoning: str
+    hold_duration_hint: int | None  # Additional days to hold if "hold"
+    risks_of_holding: list[str]
+    risks_of_closing: list[str]
+    raw_llm_response: str | None = None

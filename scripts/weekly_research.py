@@ -128,6 +128,9 @@ def main():
         BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
+    # Save research insights to database for judgment prompt injection
+    _save_research_to_db(report)
+
     logger.info("\n" + "=" * 50)
     logger.info("Weekly research completed successfully")
     logger.info("=" * 50)
@@ -137,6 +140,62 @@ def main():
     batch_ctx.successful_items = 1
     batch_ctx.failed_items = 0
     BatchLogger.finish(batch_ctx)
+
+
+def _save_research_to_db(report) -> None:
+    """Save weekly research insights to research_logs for judgment injection."""
+    try:
+        supabase = SupabaseClient()
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+
+        # Build a concise summary for judgment prompt consumption
+        summary_parts = []
+        if report.executive_summary:
+            summary_parts.append(report.executive_summary[:500])
+
+        for insight in (report.actionable_insights or [])[:5]:
+            summary_parts.append(f"- {insight}")
+
+        if report.macro_outlook:
+            mo = report.macro_outlook
+            summary_parts.append(
+                f"Macro: {mo.market_outlook} outlook, risk={mo.risk_level}"
+            )
+            if mo.overweight_sectors:
+                summary_parts.append(f"Overweight: {', '.join(mo.overweight_sectors)}")
+            if mo.underweight_sectors:
+                summary_parts.append(f"Underweight: {', '.join(mo.underweight_sectors)}")
+
+        content = "\n".join(summary_parts)
+
+        # Collect all mentioned symbols
+        symbols = list(set(
+            (report.stocks_to_watch or []) + (report.stocks_to_avoid or [])
+        ))
+
+        # Sector outlook metadata
+        sector_data = {}
+        for sa in (report.sector_analyses or []):
+            sector_data[sa.sector] = {
+                "outlook": sa.outlook,
+                "confidence": sa.confidence,
+                "top_opportunities": sa.top_opportunities[:3] if sa.top_opportunities else [],
+            }
+
+        supabase._client.table("research_logs").insert({
+            "research_type": "market",
+            "external_findings": content,
+            "system_data": {
+                "sectors": sector_data,
+                "stocks_to_watch": report.stocks_to_watch or [],
+                "stocks_to_avoid": report.stocks_to_avoid or [],
+            },
+            "batch_date": today,
+        }).execute()
+
+        logger.info(f"Saved weekly research to research_logs ({len(content)} chars, {len(symbols)} symbols)")
+    except Exception as e:
+        logger.warning(f"Failed to save research to DB: {e}")
 
 
 def _build_market_context() -> dict:

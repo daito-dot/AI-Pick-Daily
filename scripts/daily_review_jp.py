@@ -5,13 +5,13 @@ Daily Review Script for Japanese Stocks
 Evening batch job that:
 1. Calculates returns for ALL scored Japanese stocks (not just picks)
 2. Identifies missed opportunities
-3. Generates AI reflection using Gemini
-4. Saves lessons to database
-5. **FEEDBACK LOOP**: Adjusts scoring thresholds based on performance
+3. Records judgment outcomes for feedback
+4. **FEEDBACK LOOP**: Adjusts scoring thresholds based on performance
+5. **FEEDBACK LOOP**: Adjusts factor weights based on outcome correlations
 
 This enables learning from what we DIDN'T recommend, not just what we did.
-The threshold adjustment creates a closed feedback loop where the system
-automatically adapts its behavior based on past performance.
+The threshold and factor weight adjustments create closed feedback loops where
+the system automatically adapts its behavior based on past performance.
 """
 import logging
 import sys
@@ -25,8 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import config
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
 from src.data.supabase_client import SupabaseClient
-from src.llm import get_llm_client
-from src.pipeline.review import adjust_thresholds_for_strategies, populate_judgment_outcomes
+from src.judgment import JudgmentService
+from src.pipeline.market_config import JP_MARKET
+from src.pipeline.review import adjust_thresholds_for_strategies, adjust_factor_weights, populate_judgment_outcomes
 from src.portfolio import PortfolioManager
 from src.batch_logger import BatchLogger, BatchType
 
@@ -212,120 +213,6 @@ def calculate_all_returns_jp(
     return results
 
 
-def generate_reflection_jp(llm_client, results: dict) -> str:
-    """
-    Generate AI reflection on today's Japanese stock performance.
-    Includes analysis of missed opportunities.
-    """
-    if results.get("error"):
-        return f"No data to review: {results.get('error')}"
-
-    picked = results.get("picked_returns", [])
-    not_picked = results.get("not_picked_returns", [])
-    missed = results.get("missed_opportunities", [])
-
-    # Calculate stats
-    def avg_return(lst):
-        if not lst:
-            return 0
-        return sum(r["return_pct"] for r in lst) / len(lst)
-
-    picked_avg = avg_return(picked)
-    not_picked_avg = avg_return(not_picked)
-    missed_avg = avg_return(missed)
-
-    wins = len([r for r in picked if r["return_pct"] >= 1])
-    losses = len([r for r in picked if r["return_pct"] <= -1])
-
-    context = f"""
-## 日本株パフォーマンスレビュー ({results['days_ago']}日後, {results['date']})
-
-### 推奨銘柄のパフォーマンス
-- 推奨銘柄数: {len(picked)}
-- 勝ち (≥1%): {wins}
-- 負け (≤-1%): {losses}
-- 平均リターン: {picked_avg:+.2f}%
-
-### 非推奨銘柄のパフォーマンス
-- 非推奨銘柄数: {len(not_picked)}
-- 平均リターン: {not_picked_avg:+.2f}%
-
-### 重要: 見逃した機会 (≥3%リターン、非推奨)
-- 件数: {len(missed)}
-- 見逃した平均リターン: {missed_avg:+.2f}%
-"""
-
-    if missed:
-        context += "\n見逃した機会の詳細:\n"
-        for m in sorted(missed, key=lambda x: x["return_pct"], reverse=True)[:5]:
-            context += f"- {m['symbol']} ({m['strategy']}): スコア={m['score']}, リターン={m['return_pct']:+.1f}%\n"
-
-    if picked:
-        context += "\n推奨銘柄の詳細:\n"
-        for p in sorted(picked, key=lambda x: x["return_pct"], reverse=True)[:5]:
-            context += f"- {p['symbol']} ({p['strategy']}): スコア={p['score']}, リターン={p['return_pct']:+.1f}%\n"
-
-    prompt = f"""
-あなたはAI株式推奨システムで、過去のパフォーマンスをレビューしています。
-対象市場: 日本株（東証）
-
-{context}
-
-これらの結果に基づいて分析を行ってください:
-
-1. **推奨品質**: 推奨銘柄は非推奨銘柄より良かったか？平均リターンを比較。
-
-2. **見逃した機会の分析**:
-   - なぜこれらの銘柄を見逃したのか？（スコアが低すぎた？閾値が高すぎた？）
-   - 見逃した機会のスコアと閾値の比較
-   - 閾値を調整すべきか？
-
-3. **閾値の推奨**:
-   - 現在のV1閾値: 60, 現在のV2閾値: 75
-   - 見逃した機会に基づき、閾値調整を具体的な数値で提案
-
-4. **重要な学び**: 最も重要な教訓は何か？
-
-正直に分析してください。良い機会を見逃した場合、「何も推奨しない」は成功ではありません。
-具体的な数値と実行可能な推奨事項を含めてください。
-"""
-
-    try:
-        response = llm_client.generate_with_thinking(prompt)
-        return response.content
-    except Exception as e:
-        logger.error(f"Failed to generate reflection: {e}")
-        return f"Failed to generate reflection: {e}"
-
-
-def save_ai_lesson_jp(
-    supabase: SupabaseClient,
-    reflection: str,
-    missed: list,
-    date: str,
-):
-    """Save AI lesson for Japanese stocks to database."""
-    try:
-        missed_symbols = [m["symbol"] for m in missed[:5]]
-        miss_analysis = "\n".join([
-            f"{m['symbol']}: スコア={m['score']}, リターン={m['return_pct']:+.1f}%"
-            for m in missed[:5]
-        ])
-
-        # Use market_type column to distinguish from US lessons (not modifying lesson_date)
-        supabase._client.table("ai_lessons").upsert({
-            "lesson_date": date,  # Keep as DATE format (YYYY-MM-DD)
-            "market_type": "jp",  # Use market_type column for distinction
-            "lesson_text": reflection,
-            "biggest_miss_symbols": missed_symbols,
-            "miss_analysis": miss_analysis,
-        }, on_conflict="lesson_date,market_type").execute()
-
-        logger.info(f"Saved JP AI lesson for {date}")
-    except Exception as e:
-        logger.error(f"Failed to save JP AI lesson: {e}")
-
-
 def main():
     """Main review pipeline for Japanese stocks."""
     logger.info("=" * 60)
@@ -340,7 +227,6 @@ def main():
     try:
         yf_client = get_yfinance_client()
         supabase = SupabaseClient()
-        llm = get_llm_client()
     except Exception as e:
         logger.error(f"Failed to initialize clients: {e}")
         BatchLogger.finish(batch_ctx, error=str(e))
@@ -390,6 +276,7 @@ def main():
         supabase=supabase,
         finnhub=None,  # Not used for JP stocks
         yfinance=yf_client,
+        market_config=JP_MARKET,
     )
 
     # Get current market regime
@@ -433,13 +320,48 @@ def main():
     exit_signals = []
 
     if all_positions:
-        # Evaluate exit signals
-        exit_signals = portfolio.evaluate_exit_signals(
-            positions=all_positions,
-            current_scores=current_scores if current_scores else None,
-            thresholds=thresholds,
-            market_regime=market_regime_str,
-        )
+        # Step 3a: Identify soft exit candidates and consult AI
+        exit_judgments: dict[str, object] = {}
+        if config.llm.enable_judgment:
+            try:
+                judgment_service = JudgmentService()
+                all_soft_candidates = []
+                for strategy in JP_STRATEGIES:
+                    strategy_positions = [p for p in all_positions if p.strategy_mode == strategy]
+                    soft_candidates = portfolio.get_soft_exit_candidates(
+                        positions=strategy_positions,
+                        current_scores=current_scores if current_scores else None,
+                        thresholds=thresholds,
+                        market_regime=market_regime_str,
+                    )
+                    all_soft_candidates.extend(soft_candidates)
+
+                if all_soft_candidates:
+                    logger.info(f"Consulting AI for {len(all_soft_candidates)} soft exit candidates")
+                    ai_results = judgment_service.judge_exits(
+                        positions_for_review=all_soft_candidates,
+                        market_regime=market_regime_str or "normal",
+                    )
+                    exit_judgments = {r.symbol: r for r in ai_results}
+                    logger.info(f"AI exit judgments: {[(r.symbol, r.decision) for r in ai_results]}")
+            except Exception as e:
+                logger.error(f"AI exit judgment failed: {e}")
+                # No fallback — proceed without AI (all soft exits fire)
+
+        # Step 3b: Evaluate exit signals with AI judgments
+        for strategy in JP_STRATEGIES:
+            strategy_positions = [p for p in all_positions if p.strategy_mode == strategy]
+            if not strategy_positions:
+                continue
+
+            strategy_exit_signals = portfolio.evaluate_exit_signals(
+                positions=strategy_positions,
+                current_scores=current_scores if current_scores else None,
+                thresholds=thresholds,
+                market_regime=market_regime_str,
+                exit_judgments=exit_judgments,
+            )
+            exit_signals.extend(strategy_exit_signals)
 
         if exit_signals:
             logger.info(f"Exit signals triggered: {len(exit_signals)}")
@@ -480,36 +402,20 @@ def main():
         except Exception as e:
             logger.error(f"Failed to update snapshot for {strategy}: {e}")
 
-    # 4. Generate AI reflection (focus on 5-day results)
-    logger.info("Step 4: Generating AI reflection for JP stocks...")
+    # 4. FEEDBACK LOOP: Adjust thresholds based on performance (only if we have data)
     if not results_5d.get("error"):
-        reflection = generate_reflection_jp(llm, results_5d)
-        logger.info(f"Reflection:\n{reflection}")
-        missed_opportunities = results_5d.get("missed_opportunities", [])
-    else:
-        # Fallback: save a placeholder lesson when no 5-day data available
-        logger.warning(f"No 5-day data available for JP: {results_5d.get('error')}")
-        reflection = f"5日前のデータがまだ蓄積されていないため、本日のパフォーマンス分析はスキップされました。データ蓄積後に詳細な分析が開始されます。（{results_5d.get('error', 'Unknown error')}）"
-        missed_opportunities = []
-
-    # 5. Save lesson (always save, even if just a placeholder)
-    logger.info("Step 5: Saving JP AI lesson...")
-    save_ai_lesson_jp(
-        supabase,
-        reflection,
-        missed_opportunities,
-        today,
-    )
-
-    # 6. FEEDBACK LOOP: Adjust thresholds based on performance (only if we have data)
-    if not results_5d.get("error"):
-        logger.info("Step 6: Analyzing and adjusting JP thresholds (FEEDBACK LOOP)...")
+        logger.info("Step 4: Analyzing and adjusting JP thresholds (FEEDBACK LOOP)...")
         adjust_thresholds_for_strategies(supabase, results_5d, JP_STRATEGIES, create_default_config=True)
     else:
-        logger.info("Step 6: Skipping JP threshold adjustment (no 5-day data)")
+        logger.info("Step 4: Skipping JP threshold adjustment (no 5-day data)")
 
-    # 7. Get and log performance summary
-    logger.info("Step 7: Getting overall JP performance summary...")
+    # 5. FEEDBACK LOOP: Adjust factor weights based on outcome correlations
+    logger.info("Step 5: Adjusting JP factor weights (FEEDBACK LOOP)...")
+    for strategy in JP_STRATEGIES:
+        adjust_factor_weights(supabase, strategy)
+
+    # 6. Get and log performance summary
+    logger.info("Step 6: Getting overall JP performance summary...")
     for strategy in JP_STRATEGIES:
         summary = supabase.get_performance_summary(days=30, strategy_mode=strategy)
         logger.info(f"\n{strategy.upper()} Summary (30 days):")

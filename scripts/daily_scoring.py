@@ -52,7 +52,7 @@ from src.judgment import (
 from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
 from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
-from src.pipeline import US_MARKET, load_dynamic_thresholds, run_llm_judgment_phase, open_positions_and_snapshot
+from src.pipeline import US_MARKET, load_dynamic_thresholds, load_factor_weights, run_llm_judgment_phase, open_positions_and_snapshot
 from src.logging_config import setup_logging, set_batch_id, get_logger, create_symbol_logger
 
 
@@ -889,9 +889,10 @@ def main():
         BatchLogger.finish(batch_ctx, error=error_msg)
         sys.exit(1)
 
-    # 4. Fetch dynamic thresholds from database (FEEDBACK LOOP)
-    logger.info("Step 4: Fetching dynamic thresholds from scoring_config...")
+    # 4. Fetch dynamic thresholds and factor weights from database (FEEDBACK LOOP)
+    logger.info("Step 4: Fetching dynamic thresholds and factor weights from scoring_config...")
     v1_threshold, v2_threshold = load_dynamic_thresholds(supabase, US_MARKET)
+    v1_factor_weights, v2_factor_weights = load_factor_weights(supabase, US_MARKET)
 
     # 5. Run dual scoring (V1 Conservative + V2 Aggressive)
     logger.info("Step 5: Running dual scoring pipeline...")
@@ -901,6 +902,8 @@ def main():
         market_regime,
         v1_threshold=v1_threshold,
         v2_threshold=v2_threshold,
+        v1_factor_weights=v1_factor_weights,
+        v2_factor_weights=v2_factor_weights,
     )
 
     logger.info(
@@ -914,9 +917,9 @@ def main():
         }
     )
 
-    # 5.5. Run LLM Judgment for top candidates (Layer 2)
-    logger.info("Step 5.5: Running LLM judgment for top candidates...")
-    use_llm_judgment = config.llm.enable_judgment
+    # 5.5. Run LLM Judgment for top candidates (Layer 2 - Portfolio Level)
+    logger.info("Step 5.5: Running portfolio-level LLM judgment...")
+    portfolio = PortfolioManager(supabase=supabase, finnhub=finnhub, yfinance=yf_client, market_config=US_MARKET)
 
     v1_final_picks, v2_final_picks, judgment_stats = run_llm_judgment_phase(
         dual_result=dual_result,
@@ -930,6 +933,7 @@ def main():
         max_picks=market_regime.max_picks,
         finnhub=finnhub,
         supabase=supabase,
+        portfolio=portfolio,
     )
     total_successful_judgments = judgment_stats.successful_judgments
     total_failed_judgments = judgment_stats.failed_judgments
@@ -1054,7 +1058,6 @@ def main():
 
     # 7. PAPER TRADING: Open positions and update snapshots
     logger.info("Step 7: Opening positions for paper trading...")
-    portfolio = PortfolioManager(supabase=supabase, finnhub=finnhub, yfinance=yf_client)
 
     # Get S&P 500 daily return for benchmark
     sp500_daily_pct = None

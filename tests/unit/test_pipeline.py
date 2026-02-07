@@ -237,74 +237,42 @@ class TestLoadDynamicThresholds:
 
 
 # ============================================================
-# _format_past_lessons Tests
+# load_factor_weights Tests
 # ============================================================
 
 
-class TestFormatPastLessons:
-    """Tests for _format_past_lessons helper."""
+class TestLoadFactorWeights:
+    """Tests for load_factor_weights."""
 
-    def test_returns_none_when_no_lessons(self):
-        from src.pipeline.scoring import _format_past_lessons
+    def test_returns_weights_from_config(self):
+        from src.pipeline.scoring import load_factor_weights
         supabase = MagicMock()
-        supabase.get_recent_ai_lessons.return_value = []
-        result = _format_past_lessons(supabase, US_MARKET)
-        assert result is None
-
-    def test_formats_miss_analysis(self):
-        from src.pipeline.scoring import _format_past_lessons
-        supabase = MagicMock()
-        supabase.get_recent_ai_lessons.return_value = [
-            {
-                "lesson_date": "2025-01-15",
-                "miss_analysis": "AAPL: Score=72, Return=+5.2%",
-                "lesson_text": "Some reflection",
-            }
+        supabase.get_scoring_config.side_effect = [
+            {"factor_weights": {"trend": 0.30, "momentum": 0.40, "value": 0.20, "sentiment": 0.10}},
+            {"factor_weights": {"momentum_12_1": 0.35, "breakout": 0.30, "catalyst": 0.20, "risk_adjusted": 0.15}},
         ]
-        result = _format_past_lessons(supabase, US_MARKET)
-        assert result is not None
-        assert "2025-01-15" in result
-        assert "AAPL" in result
-        assert "見逃し分析" in result
+        v1, v2 = load_factor_weights(supabase, US_MARKET)
+        assert v1["trend"] == 0.30
+        assert v2["momentum_12_1"] == 0.35
 
-    def test_falls_back_to_lesson_text(self):
-        from src.pipeline.scoring import _format_past_lessons
+    def test_returns_none_when_no_weights(self):
+        from src.pipeline.scoring import load_factor_weights
         supabase = MagicMock()
-        supabase.get_recent_ai_lessons.return_value = [
-            {
-                "lesson_date": "2025-01-15",
-                "miss_analysis": "",
-                "lesson_text": "Important lesson about momentum stocks",
-            }
+        supabase.get_scoring_config.side_effect = [
+            {"threshold": 60},  # No factor_weights key
+            None,
         ]
-        result = _format_past_lessons(supabase, JP_MARKET)
-        assert "Important lesson" in result
-
-    def test_truncates_long_lesson_text(self):
-        from src.pipeline.scoring import _format_past_lessons
-        supabase = MagicMock()
-        long_text = "x" * 500
-        supabase.get_recent_ai_lessons.return_value = [
-            {"lesson_date": "2025-01-15", "miss_analysis": "", "lesson_text": long_text}
-        ]
-        result = _format_past_lessons(supabase, US_MARKET)
-        assert len(result) < 400  # Truncated to 300 + date prefix
+        v1, v2 = load_factor_weights(supabase, JP_MARKET)
+        assert v1 is None
+        assert v2 is None
 
     def test_returns_none_on_exception(self):
-        from src.pipeline.scoring import _format_past_lessons
+        from src.pipeline.scoring import load_factor_weights
         supabase = MagicMock()
-        supabase.get_recent_ai_lessons.side_effect = Exception("DB error")
-        result = _format_past_lessons(supabase, US_MARKET)
-        assert result is None
-
-    def test_skips_empty_lessons(self):
-        from src.pipeline.scoring import _format_past_lessons
-        supabase = MagicMock()
-        supabase.get_recent_ai_lessons.return_value = [
-            {"lesson_date": "2025-01-15", "miss_analysis": "", "lesson_text": ""}
-        ]
-        result = _format_past_lessons(supabase, US_MARKET)
-        assert result is None
+        supabase.get_scoring_config.side_effect = Exception("DB down")
+        v1, v2 = load_factor_weights(supabase, US_MARKET)
+        assert v1 is None
+        assert v2 is None
 
 
 # ============================================================
