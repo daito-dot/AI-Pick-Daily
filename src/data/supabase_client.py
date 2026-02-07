@@ -1333,6 +1333,33 @@ class SupabaseClient:
 
         return result.data[0] if result.data else {}
 
+    def get_recent_ai_lessons(
+        self,
+        market_type: str = "us",
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Get recent AI lessons for injection into judgment prompts.
+
+        Args:
+            market_type: 'us' or 'jp'
+            limit: Max lessons to return
+
+        Returns:
+            List of lesson dicts with lesson_text, miss_analysis, lesson_date
+        """
+        try:
+            result = self._client.table("ai_lessons").select(
+                "lesson_date, lesson_text, miss_analysis, biggest_miss_symbols"
+            ).eq(
+                "market_type", market_type
+            ).order(
+                "lesson_date", desc=True
+            ).limit(limit).execute()
+            return result.data or []
+        except Exception as e:
+            logger.warning(f"Failed to fetch ai_lessons: {e}")
+            return []
+
     def save_reflection_record(
         self,
         reflection_date: str,

@@ -42,6 +42,7 @@ def build_judgment_prompt(
     news_data: list[dict],
     rule_based_scores: dict,
     market_regime: str,
+    past_lessons: str | None = None,
 ) -> str:
     """
     Build the judgment prompt for a single stock.
@@ -53,6 +54,7 @@ def build_judgment_prompt(
         news_data: Recent news with timestamps
         rule_based_scores: Existing rule-based agent scores
         market_regime: Current market regime
+        past_lessons: Optional formatted string of past AI lessons
 
     Returns:
         Complete prompt string for LLM
@@ -69,6 +71,11 @@ def build_judgment_prompt(
 
     # Strategy-specific guidance
     strategy_guidance = _get_strategy_guidance(strategy_mode)
+
+    # Past lessons section (optional)
+    lessons_section = ""
+    if past_lessons:
+        lessons_section = f"\n## Past Lessons (from recent reviews)\n{past_lessons}\n"
 
     prompt = f"""# Investment Judgment Request
 
@@ -88,7 +95,7 @@ Market Regime: {market_regime}
 
 ## Strategy Guidance
 {strategy_guidance}
-
+{lessons_section}
 ## Your Task
 
 Analyze all provided information and make an investment judgment.

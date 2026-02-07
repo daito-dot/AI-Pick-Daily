@@ -44,6 +44,7 @@ class JudgmentService:
         news_data: list[dict],
         rule_based_scores: dict,
         market_regime: str = "normal",
+        past_lessons: str | None = None,
     ) -> JudgmentOutput:
         """
         Generate an investment judgment for a single stock.
@@ -58,6 +59,7 @@ class JudgmentService:
             news_data: Recent news with timestamps and sentiment
             rule_based_scores: Existing rule-based agent scores
             market_regime: Current market regime
+            past_lessons: Optional formatted past lessons for context
 
         Returns:
             JudgmentOutput with decision and full reasoning trace
@@ -72,6 +74,7 @@ class JudgmentService:
             news_data=news_data,
             rule_based_scores=rule_based_scores,
             market_regime=market_regime,
+            past_lessons=past_lessons,
         )
 
         # Create full prompt with system context

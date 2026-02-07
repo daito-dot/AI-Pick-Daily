@@ -298,6 +298,7 @@ def run_judgment_for_candidates(
     batch_date: str,
     top_n: int | None = None,  # None = judge all candidates
     yfinance: "YFinanceClient | None" = None,
+    past_lessons: str | None = None,
 ) -> JudgmentResult:
     """
     Run LLM judgment for candidates that passed rule-based threshold.
@@ -348,6 +349,7 @@ def run_judgment_for_candidates(
                 news_data=news_data,
                 rule_based_scores=scores_dict,
                 market_regime=market_regime,
+                past_lessons=past_lessons,
             )
 
             # Save to database

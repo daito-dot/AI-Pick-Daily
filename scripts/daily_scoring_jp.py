@@ -40,6 +40,7 @@ from src.scoring.composite_v2 import get_threshold_passed_symbols
 from src.batch_logger import BatchLogger, BatchType
 from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
 from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
+from src.pipeline import JP_MARKET, load_dynamic_thresholds, run_llm_judgment_phase, open_positions_and_snapshot
 
 
 class DataFetchError(Exception):
@@ -519,16 +520,7 @@ def main():
 
         # Step 3: Fetch dynamic thresholds from database (FEEDBACK LOOP)
         logger.info("Step 3: Fetching dynamic thresholds from scoring_config...")
-        try:
-            v1_config = supabase.get_scoring_config("jp_conservative")
-            v2_config = supabase.get_scoring_config("jp_aggressive")
-            v1_threshold = int(v1_config.get("threshold", 60)) if v1_config else None
-            v2_threshold = int(v2_config.get("threshold", 75)) if v2_config else None
-            logger.info(f"Dynamic thresholds: V1={v1_threshold}, V2={v2_threshold}")
-        except Exception as e:
-            logger.warning(f"Failed to fetch dynamic thresholds, using defaults: {e}")
-            v1_threshold = None
-            v2_threshold = None
+        v1_threshold, v2_threshold = load_dynamic_thresholds(supabase, JP_MARKET)
 
         # Step 4: Run dual scoring (V1 Conservative + V2 Aggressive)
         logger.info("Step 4: Running dual scoring pipeline...")
@@ -547,125 +539,23 @@ def main():
 
         # Step 4.5: Run LLM Judgment for top candidates (Layer 2)
         logger.info("Step 4.5: Running LLM judgment for top candidates...")
-
         use_llm_judgment = config.llm.enable_judgment
-        v1_final_picks = dual_result.v1_picks
-        v2_final_picks = dual_result.v2_picks
 
-        if use_llm_judgment:
-            judgment_ctx = None
-            try:
-                judgment_ctx = BatchLogger.start(
-                    BatchType.LLM_JUDGMENT,
-                    model=config.llm.analysis_model
-                )
-                judgment_service = JudgmentService()
-
-                # Get thresholds (use dynamic or fall back to config)
-                v1_min_score = v1_threshold if v1_threshold is not None else config.strategy.v1_min_score
-                v2_min_score = v2_threshold if v2_threshold is not None else config.strategy.v2_min_score
-
-                # NEW LOGIC: Filter candidates by threshold (pass/fail) instead of top_n
-                v1_passed_symbols = get_threshold_passed_symbols(dual_result.v1_scores, v1_min_score)
-                v2_passed_symbols = get_threshold_passed_symbols(dual_result.v2_scores, v2_min_score)
-
-                logger.info(f"V1 threshold-passed candidates: {len(v1_passed_symbols)}")
-                logger.info(f"V2 threshold-passed candidates: {len(v2_passed_symbols)}")
-
-                # Build candidate lists for threshold-passed stocks only
-                v1_candidates = []
-                v1_score_map = {s.symbol: s for s in dual_result.v1_scores}
-                for stock_data in v1_stocks_data:
-                    if stock_data.symbol in v1_passed_symbols:
-                        v1_candidates.append((stock_data, v1_score_map[stock_data.symbol]))
-
-                v2_candidates = []
-                v2_score_map = {s.symbol: s for s in dual_result.v2_scores}
-                for stock_data in v2_stocks_data:
-                    if stock_data.symbol in v2_passed_symbols:
-                        v2_candidates.append((stock_data, v2_score_map[stock_data.symbol]))
-
-                # Run V1 Conservative judgments (judge ALL threshold-passed candidates)
-                v1_judgment_result = run_judgment_for_candidates(
-                    judgment_service=judgment_service,
-                    finnhub=None,  # No Finnhub for JP stocks
-                    supabase=supabase,
-                    candidates=v1_candidates,
-                    strategy_mode="jp_conservative",
-                    market_regime=regime,
-                    batch_date=today,
-                    top_n=None,  # Judge all threshold-passed candidates
-                    yfinance=yf_client,  # Use yfinance for news
-                )
-
-                # NEW: Use LLM-first selection (sort by confidence, not rule score)
-                v1_final_picks = select_final_picks(
-                    scores=dual_result.v1_scores,
-                    judgments=v1_judgment_result.successful,
-                    max_picks=market_regime.max_picks,  # V1 respects regime
-                    min_rule_score=v1_min_score,
-                    min_confidence=0.6,  # Conservative requires 60% confidence
-                )
-
-                # Log V1 failures if any
-                if v1_judgment_result.failed:
-                    logger.warning(
-                        f"V1 judgment failures ({v1_judgment_result.failure_count}): "
-                        f"{[(sym, err[:50]) for sym, err in v1_judgment_result.failed]}"
-                    )
-
-                # Run V2 Aggressive judgments (judge ALL threshold-passed candidates)
-                v2_judgment_result = run_judgment_for_candidates(
-                    judgment_service=judgment_service,
-                    finnhub=None,
-                    supabase=supabase,
-                    candidates=v2_candidates,
-                    strategy_mode="jp_aggressive",
-                    market_regime=regime,
-                    batch_date=today,
-                    top_n=None,  # Judge all threshold-passed candidates
-                    yfinance=yf_client,  # Use yfinance for news
-                )
-
-                # NEW: Use LLM-first selection (sort by confidence, not rule score)
-                v2_max_picks = config.strategy.v2_max_picks if market_regime.max_picks > 0 else 0
-                v2_final_picks = select_final_picks(
-                    scores=dual_result.v2_scores,
-                    judgments=v2_judgment_result.successful,
-                    max_picks=v2_max_picks,
-                    min_rule_score=v2_min_score,
-                    min_confidence=0.5,  # Aggressive allows 50% confidence
-                )
-
-                # Log V2 failures if any
-                if v2_judgment_result.failed:
-                    logger.warning(
-                        f"V2 judgment failures ({v2_judgment_result.failure_count}): "
-                        f"{[(sym, err[:50]) for sym, err in v2_judgment_result.failed]}"
-                    )
-
-                logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
-                logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
-
-                # Track judgment results
-                total_candidates = len(v1_candidates) + len(v2_candidates)
-                judgment_ctx.successful_items = v1_judgment_result.success_count + v2_judgment_result.success_count
-                judgment_ctx.total_items = total_candidates
-                judgment_ctx.failed_items = v1_judgment_result.failure_count + v2_judgment_result.failure_count
-                BatchLogger.finish(judgment_ctx)
-
-                # Update monitoring tracking variables
-                total_successful_judgments = v1_judgment_result.success_count + v2_judgment_result.success_count
-                total_failed_judgments = v1_judgment_result.failure_count + v2_judgment_result.failure_count
-
-            except Exception as e:
-                logger.error(f"LLM judgment failed, using rule-based picks: {e}")
-                if judgment_ctx is not None:
-                    BatchLogger.finish(judgment_ctx, error=str(e))
-                v1_final_picks = dual_result.v1_picks
-                v2_final_picks = dual_result.v2_picks
-        else:
-            logger.info("LLM judgment disabled, using rule-based picks only")
+        v1_final_picks, v2_final_picks, judgment_stats = run_llm_judgment_phase(
+            dual_result=dual_result,
+            v1_stocks_data=v1_stocks_data,
+            v2_stocks_data=v2_stocks_data,
+            v1_threshold=v1_threshold,
+            v2_threshold=v2_threshold,
+            market_regime_str=regime,
+            market_config=JP_MARKET,
+            today=today,
+            max_picks=market_regime.max_picks,
+            yfinance=yf_client,
+            supabase=supabase,
+        )
+        total_successful_judgments = judgment_stats.successful_judgments
+        total_failed_judgments = judgment_stats.failed_judgments
 
         # Step 5: Save results (uses final picks after LLM judgment)
         logger.info("Step 5: Saving results...")
@@ -684,70 +574,33 @@ def main():
             batch_ctx.metadata = batch_ctx.metadata or {}
             batch_ctx.metadata["save_errors"] = save_errors
 
-        # Step 6: Paper Trading - Open positions for picks
+        # Step 6: Paper Trading - Open positions and update snapshots
         logger.info("Step 6: Opening positions for paper trading...")
+        portfolio = PortfolioManager(supabase=supabase, finnhub=None, yfinance=yf_client)
 
-        if market_regime.max_picks > 0:
-            portfolio = PortfolioManager(
-                supabase=supabase,
-                finnhub=None,  # No Finnhub for JP
-                yfinance=yf_client,
-            )
+        # Get Nikkei 225 daily return for benchmark
+        nikkei_daily_pct = None
+        try:
+            import yfinance as yf
+            nikkei = yf.Ticker("^N225")
+            nikkei_hist = nikkei.history(period="5d")
+            if len(nikkei_hist) >= 2:
+                closes = nikkei_hist["Close"].tolist()
+                nikkei_daily_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
+                logger.info(f"Nikkei 225 daily return: {nikkei_daily_pct:.2f}%")
+        except Exception as e:
+            logger.warning(f"Failed to get Nikkei 225 daily return: {e}")
 
-            # Build price dict from stock data
-            prices = {d.symbol: d.open_price for d in v1_stocks_data if d.open_price > 0}
-
-            # Build score dicts
-            v1_score_dict = {s.symbol: s.composite_score for s in dual_result.v1_scores}
-            v2_score_dict = {s.symbol: s.composite_score for s in dual_result.v2_scores}
-
-            # Open positions for V1 Conservative
-            if v1_final_picks:
-                v1_opened = portfolio.open_positions_for_picks(
-                    picks=v1_final_picks,
-                    strategy_mode="jp_conservative",
-                    scores=v1_score_dict,
-                    prices=prices,
-                )
-                logger.info(f"V1 opened {len(v1_opened)} positions")
-
-            # Open positions for V2 Aggressive
-            if v2_final_picks:
-                v2_opened = portfolio.open_positions_for_picks(
-                    picks=v2_final_picks,
-                    strategy_mode="jp_aggressive",
-                    scores=v2_score_dict,
-                    prices=prices,
-                )
-                logger.info(f"V2 opened {len(v2_opened)} positions")
-
-            # Step 7: Update portfolio snapshots
-            logger.info("Step 7: Updating portfolio snapshots...")
-
-            # Get Nikkei 225 daily return for benchmark
-            nikkei_daily_pct = None
-            try:
-                import yfinance as yf
-                nikkei = yf.Ticker("^N225")
-                nikkei_hist = nikkei.history(period="5d")
-                if len(nikkei_hist) >= 2:
-                    closes = nikkei_hist["Close"].tolist()
-                    nikkei_daily_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
-                    logger.info(f"Nikkei 225 daily return: {nikkei_daily_pct:.2f}%")
-            except Exception as e:
-                logger.warning(f"Failed to get Nikkei 225 daily return: {e}")
-
-            for strategy in ["jp_conservative", "jp_aggressive"]:
-                try:
-                    portfolio.update_portfolio_snapshot(
-                        strategy_mode=strategy,
-                        sp500_daily_pct=nikkei_daily_pct,  # Using Nikkei as benchmark
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to update snapshot for {strategy}: {e}")
-
-        else:
-            logger.info("Skipping position opening - market in crisis mode")
+        open_positions_and_snapshot(
+            portfolio=portfolio,
+            dual_result=dual_result,
+            v1_stocks_data=v1_stocks_data,
+            v1_final_picks=v1_final_picks,
+            v2_final_picks=v2_final_picks,
+            market_config=JP_MARKET,
+            max_picks=market_regime.max_picks,
+            benchmark_daily_pct=nikkei_daily_pct,
+        )
 
         # Record batch completion stats
         batch_ctx.successful_items = len(v1_stocks_data)

@@ -27,12 +27,7 @@ from src.data.finnhub_client import FinnhubClient
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
 from src.data.supabase_client import SupabaseClient
 from src.llm import get_llm_client
-from src.scoring.threshold_optimizer import (
-    calculate_optimal_threshold,
-    should_apply_adjustment,
-    format_adjustment_log,
-    check_overfitting_protection,
-)
+from src.pipeline.review import adjust_thresholds_for_strategies, populate_judgment_outcomes
 from src.portfolio import PortfolioManager
 from src.batch_logger import BatchLogger, BatchType
 
@@ -326,143 +321,6 @@ def save_ai_lesson(
         logger.error(f"Failed to save AI lesson: {e}")
 
 
-def adjust_thresholds(supabase: SupabaseClient, results: dict):
-    """
-    FEEDBACK LOOP: Analyze performance and adjust thresholds.
-
-    This is the core of the closed feedback loop:
-    1. Get current thresholds from scoring_config
-    2. Check overfitting protection rules
-    3. Analyze missed opportunities and picked performance
-    4. Calculate optimal threshold adjustment
-    5. Update scoring_config if adjustment is warranted
-    6. Record change in threshold_history for audit
-
-    BACKTEST OVERFITTING PROTECTION:
-    - Requires minimum trade count before adjustments
-    - Enforces cooldown period between adjustments
-    - Limits monthly adjustment count
-    """
-    if results.get("error"):
-        logger.info("No data for threshold adjustment")
-        return
-
-    picked = results.get("picked_returns", [])
-    not_picked = results.get("not_picked_returns", [])
-    missed = results.get("missed_opportunities", [])
-
-    # Get threshold history for overfitting check
-    try:
-        threshold_history = supabase._client.table("threshold_history").select("*").order(
-            "adjustment_date", desc=True
-        ).limit(30).execute().data or []
-    except Exception as e:
-        logger.warning(f"Failed to fetch threshold history: {e}")
-        threshold_history = []
-
-    # Get trade count for overfitting check
-    try:
-        trade_count_result = supabase._client.table("trade_history").select(
-            "id", count="exact"
-        ).execute()
-        total_trades = trade_count_result.count or 0
-    except Exception as e:
-        logger.warning(f"Failed to fetch trade count: {e}")
-        total_trades = 0
-
-    # Process each strategy separately
-    for strategy in ["conservative", "aggressive"]:
-        try:
-            # Get current config
-            config = supabase.get_scoring_config(strategy)
-            if not config:
-                logger.warning(f"No scoring_config found for {strategy}, skipping")
-                continue
-
-            current_threshold = float(config.get("threshold", 60 if strategy == "conservative" else 75))
-            min_threshold = float(config.get("min_threshold", 40))
-            max_threshold = float(config.get("max_threshold", 90))
-            last_adjustment_date = config.get("last_adjustment_date")
-
-            # Filter by strategy
-            strategy_picked = [p for p in picked if p.get("strategy") == strategy]
-            strategy_not_picked = [p for p in not_picked if p.get("strategy") == strategy]
-            strategy_missed = [m for m in missed if m.get("strategy") == strategy]
-
-            # Count data points (stocks with return data)
-            data_points = len(strategy_picked) + len(strategy_not_picked)
-
-            # OVERFITTING PROTECTION CHECK
-            overfitting_check = check_overfitting_protection(
-                strategy_mode=strategy,
-                total_trades=total_trades,
-                data_points=data_points,
-                last_adjustment_date=last_adjustment_date,
-                threshold_history=threshold_history,
-            )
-
-            # Calculate optimal threshold
-            analysis = calculate_optimal_threshold(
-                current_threshold=current_threshold,
-                missed_opportunities=strategy_missed,
-                picked_performance=strategy_picked,
-                not_picked_performance=strategy_not_picked,
-                strategy_mode=strategy,
-                min_threshold=min_threshold,
-                max_threshold=max_threshold,
-            )
-
-            # Attach overfitting check result to analysis
-            analysis.overfitting_check = overfitting_check
-
-            # Log the analysis
-            logger.info(format_adjustment_log(analysis))
-
-            # Check overfitting protection FIRST
-            if not overfitting_check.can_adjust:
-                logger.info(
-                    f"THRESHOLD ADJUSTMENT BLOCKED ({strategy}): {overfitting_check.reason}"
-                )
-                continue
-
-            # Determine if we should apply the adjustment
-            if should_apply_adjustment(analysis):
-                # Update the threshold
-                logger.info(
-                    f"APPLYING THRESHOLD CHANGE: {strategy} "
-                    f"{current_threshold} -> {analysis.recommended_threshold}"
-                )
-
-                supabase.update_threshold(
-                    strategy_mode=strategy,
-                    new_threshold=analysis.recommended_threshold,
-                    reason=analysis.reason,
-                )
-
-                # Record in history
-                supabase.save_threshold_history(
-                    strategy_mode=strategy,
-                    old_threshold=current_threshold,
-                    new_threshold=analysis.recommended_threshold,
-                    reason=analysis.reason,
-                    missed_opportunities_count=analysis.missed_count,
-                    missed_avg_return=analysis.missed_avg_return,
-                    missed_avg_score=analysis.missed_avg_score,
-                    picked_count=analysis.picked_count,
-                    picked_avg_return=analysis.picked_avg_return,
-                    not_picked_count=analysis.not_picked_count,
-                    not_picked_avg_return=analysis.not_picked_avg_return,
-                    wfe_score=analysis.wfe_score,
-                )
-
-                logger.info(f"Threshold change recorded for {strategy}")
-            else:
-                logger.info(f"No threshold change needed for {strategy}")
-
-        except Exception as e:
-            logger.error(f"Failed to adjust threshold for {strategy}: {e}")
-
-
 def main():
     """Main review pipeline."""
     logger.info("=" * 60)
@@ -512,9 +370,15 @@ def main():
                 logger.warning(f"  {m['symbol']}: Score={m['score']}, +{m['return_pct']:.1f}%")
             logger.warning("=" * 40)
 
+    # 1b. Record judgment outcomes for 5-day returns
+    populate_judgment_outcomes(supabase, results_5d, return_field="5d")
+
     # 2. Also do 1-day review (for faster feedback)
     logger.info("Step 2: Calculating 1-day returns for ALL scored stocks...")
     results_1d = calculate_all_returns(finnhub, yf_client, supabase, days_ago=1, return_field="1d")
+
+    # 2b. Record judgment outcomes for 1-day returns
+    populate_judgment_outcomes(supabase, results_1d, return_field="1d")
 
     # 3. PAPER TRADING: Evaluate exit signals and close positions
     logger.info("Step 3: Evaluating exit signals for open positions...")
@@ -650,7 +514,7 @@ def main():
     # 6. FEEDBACK LOOP: Adjust thresholds based on performance (only if we have data)
     if not results_5d.get("error"):
         logger.info("Step 6: Analyzing and adjusting thresholds (FEEDBACK LOOP)...")
-        adjust_thresholds(supabase, results_5d)
+        adjust_thresholds_for_strategies(supabase, results_5d, ["conservative", "aggressive"])
     else:
         logger.info("Step 6: Skipping threshold adjustment (no 5-day data)")
 

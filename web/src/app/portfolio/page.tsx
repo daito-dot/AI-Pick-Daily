@@ -7,6 +7,7 @@ import {
   getThresholdHistory,
 } from '@/lib/supabase';
 import { MarketTabs } from '@/components/MarketTabs';
+import { EquityCurveChart } from '@/components/EquityCurveChart';
 import { getStockDisplayName } from '@/lib/jp-stocks';
 import { format, parseISO } from 'date-fns';
 import { ja } from 'date-fns/locale';
@@ -98,6 +99,8 @@ interface PortfolioContentProps {
   v1Config: any;
   v2Config: any;
   thresholdHistory: any[];
+  v1Snapshots: any[];
+  v2Snapshots: any[];
   isJapan: boolean;
   v1Strategy: string;
   v2Strategy: string;
@@ -111,6 +114,8 @@ function PortfolioContent({
   v1Config,
   v2Config,
   thresholdHistory,
+  v1Snapshots,
+  v2Snapshots,
   isJapan,
   v1Strategy,
   v2Strategy,
@@ -201,6 +206,17 @@ function PortfolioContent({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Equity Curve Chart */}
+      <div className="card">
+        <h3 className="text-lg font-semibold mb-4">資産推移（直近30日）</h3>
+        <EquityCurveChart
+          v1Snapshots={v1Snapshots}
+          v2Snapshots={v2Snapshots}
+          benchmarkName={benchmarkName}
+          isJapan={isJapan}
+        />
       </div>
 
       {/* Trade Stats */}
@@ -463,6 +479,8 @@ export default async function PortfolioPage() {
       v1Config={usV1Config}
       v2Config={usV2Config}
       thresholdHistory={usThresholdHistory}
+      v1Snapshots={usV1Snapshots}
+      v2Snapshots={usV2Snapshots}
       isJapan={false}
       v1Strategy="conservative"
       v2Strategy="aggressive"
@@ -479,6 +497,8 @@ export default async function PortfolioPage() {
       v1Config={jpV1Config}
       v2Config={jpV2Config}
       thresholdHistory={jpThresholdHistory}
+      v1Snapshots={jpV1Snapshots}
+      v2Snapshots={jpV2Snapshots}
       isJapan={true}
       v1Strategy="jp_conservative"
       v2Strategy="jp_aggressive"

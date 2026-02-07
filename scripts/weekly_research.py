@@ -19,6 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
+from src.data.yfinance_client import get_yfinance_client
+from src.data.supabase_client import SupabaseClient
 from src.research import DeepResearchService
 from src.batch_logger import BatchLogger, BatchType
 
@@ -54,12 +56,8 @@ def main():
         BatchLogger.finish(batch_ctx, error=str(e))
         sys.exit(1)
 
-    # Build market context (would normally come from data sources)
-    market_context = {
-        "regime": "normal",
-        "vix": 15.0,  # Placeholder
-        "sp500_trend": "up",
-    }
+    # Build market context from live data
+    market_context = _build_market_context()
 
     logger.info("Running weekly research...")
 
@@ -139,6 +137,38 @@ def main():
     batch_ctx.successful_items = 1
     batch_ctx.failed_items = 0
     BatchLogger.finish(batch_ctx)
+
+
+def _build_market_context() -> dict:
+    """Build market context from live data sources."""
+    context = {"regime": "normal", "vix": 15.0, "sp500_trend": "up"}
+
+    try:
+        yf_client = get_yfinance_client()
+        vix = yf_client.get_vix()
+        if vix is not None:
+            context["vix"] = vix
+            logger.info(f"VIX: {vix:.1f}")
+
+        sp500_return = yf_client.get_sp500_daily_return()
+        if sp500_return is not None:
+            context["sp500_trend"] = "up" if sp500_return >= 0 else "down"
+    except Exception as e:
+        logger.warning(f"Failed to get yfinance data, using defaults: {e}")
+
+    try:
+        supabase = SupabaseClient()
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        regime = supabase.get_market_regime(today)
+        if regime and regime.get("market_regime"):
+            context["regime"] = regime["market_regime"]
+            logger.info(f"Market regime: {context['regime']}")
+    except Exception as e:
+        logger.warning(f"Failed to get market regime, using default: {e}")
+
+    logger.info(f"Market context: {context}")
+    return context
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ def get_stock_research_data(symbol: str) -> dict:
 
     # 1. Get latest LLM judgment
     try:
-        judgment_result = client.table("llm_judgments").select("*").eq(
+        judgment_result = client.table("judgment_records").select("*").eq(
             "symbol", symbol
         ).order("created_at", desc=True).limit(1).execute()
 
@@ -146,7 +146,7 @@ def get_stock_research_data(symbol: str) -> dict:
     # 4. Get historical performance (past 30 days)
     try:
         thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        perf_result = client.table("pick_performance").select("*").eq(
+        perf_result = client.table("performance_log").select("*").eq(
             "symbol", symbol
         ).gte("pick_date", thirty_days_ago).order("pick_date", desc=True).execute()
 
@@ -156,7 +156,7 @@ def get_stock_research_data(symbol: str) -> dict:
                 "return_pct_5d": p.get("return_pct_5d"),
                 "status_5d": p.get("status_5d"),
                 "entry_price": p.get("entry_price"),
-                "exit_price_5d": p.get("exit_price_5d"),
+                "exit_price_5d": p.get("price_5d"),
             } for p in perf_result.data]
     except Exception as e:
         result["performance_error"] = str(e)
@@ -225,7 +225,7 @@ def get_all_picks_summary(market_filter: str | None = None) -> dict:
 
     # 2. Get today's judgments
     try:
-        judgments_result = client.table("llm_judgments").select("*").eq(
+        judgments_result = client.table("judgment_records").select("*").eq(
             "batch_date", today
         ).execute()
 
@@ -316,17 +316,17 @@ def get_market_status() -> dict:
 
     # 2. Get recent batch execution status
     try:
-        batch_result = client.table("batch_logs").select("*").gte(
+        batch_result = client.table("batch_execution_logs").select("*").gte(
             "started_at", seven_days_ago
         ).order("started_at", desc=True).limit(10).execute()
 
         if batch_result.data:
             result["batch_status"] = [{
                 "batch_type": b.get("batch_type"),
-                "market": b.get("market"),
+                "model_used": b.get("model_used"),
                 "status": b.get("status"),
                 "started_at": b.get("started_at"),
-                "picks_count": b.get("picks_count"),
+                "total_items": b.get("total_items"),
             } for b in batch_result.data]
     except Exception as e:
         result["batch_error"] = str(e)
@@ -531,11 +531,11 @@ def format_market_output(data: dict) -> str:
     if data.get("batch_status"):
         for b in data["batch_status"][:5]:
             status_icon = "O" if b.get('status') == 'success' else "X"
-            lines.append(f"  [{status_icon}] {b.get('batch_type', 'N/A')} ({b.get('market', 'N/A')})")
+            lines.append(f"  [{status_icon}] {b.get('batch_type', 'N/A')} ({b.get('model_used', 'N/A')})")
             lines.append(f"      Started: {b.get('started_at', 'N/A')}")
-            picks = b.get('picks_count')
-            if picks is not None:
-                lines.append(f"      Picks: {picks}")
+            total = b.get('total_items')
+            if total is not None:
+                lines.append(f"      Items: {total}")
     else:
         lines.append("  No batch logs found")
 
