@@ -299,3 +299,30 @@ export interface OutcomeTrend {
   accuracy: number;
   avg_return: number;
 }
+
+export interface RollingMetrics {
+  strategy_mode: string;
+  metric_date: string;
+  win_rate_7d: number | null;
+  win_rate_30d: number | null;
+  avg_return_7d: number | null;
+  avg_return_30d: number | null;
+  missed_rate_7d: number | null;
+  total_judgments_7d: number | null;
+  total_judgments_30d: number | null;
+}
+
+export interface ConfidenceCalibrationBucket {
+  bucket: string;
+  bucketMin: number;
+  bucketMax: number;
+  total: number;
+  correct: number;
+  accuracy: number;
+  avgReturn: number;
+}
+
+export interface ExitReasonCount {
+  exit_reason: string;
+  count: number;
+}

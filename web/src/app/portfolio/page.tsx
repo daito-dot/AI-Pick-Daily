@@ -6,6 +6,7 @@ import {
   getScoringConfigs,
   getThresholdHistory,
   getFactorWeights,
+  getExitReasonDistribution,
 } from '@/lib/supabase';
 import { PageHeader } from '@/components/ui';
 import { MarketTabs } from '@/components/MarketTabs';
@@ -16,8 +17,9 @@ import {
   ThresholdsDisplay,
   FactorWeightsSection,
   PositionsTable,
+  ExitReasonChart,
 } from '@/components/portfolio';
-import type { PortfolioSummaryWithRisk } from '@/types';
+import type { PortfolioSummaryWithRisk, ExitReasonCount } from '@/types';
 
 export const revalidate = 300;
 
@@ -33,6 +35,7 @@ interface PortfolioContentProps {
   v2Snapshots: any[];
   v1Weights: any;
   v2Weights: any;
+  exitReasons: ExitReasonCount[];
   isJapan: boolean;
   v1Strategy: string;
   v2Strategy: string;
@@ -50,6 +53,7 @@ function PortfolioContent({
   v2Snapshots,
   v1Weights,
   v2Weights,
+  exitReasons,
   isJapan,
   v1Strategy,
   v2Strategy,
@@ -89,8 +93,16 @@ function PortfolioContent({
       {/* Open Positions */}
       <PositionsTable positions={openPositions} isJapan={isJapan} />
 
-      {/* Trade History */}
-      <TradeHistoryTable trades={trades} isJapan={isJapan} />
+      {/* Trade History + Exit Reason Chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <TradeHistoryTable trades={trades} isJapan={isJapan} />
+        </div>
+        <div>
+          <h3 className="section-title mb-3">決済理由</h3>
+          <ExitReasonChart data={exitReasons} />
+        </div>
+      </div>
 
       {/* Dynamic Thresholds */}
       <ThresholdsDisplay
@@ -123,6 +135,8 @@ export default async function PortfolioPage() {
     // Shared
     configs,
     thresholdHistory,
+    usExitReasons,
+    jpExitReasons,
   ] = await Promise.all([
     // US
     getPortfolioSummary('conservative'),
@@ -159,6 +173,8 @@ export default async function PortfolioPage() {
     // Shared
     getScoringConfigs(),
     getThresholdHistory(30),
+    getExitReasonDistribution('us', 90),
+    getExitReasonDistribution('jp', 90),
   ]);
 
   // Get configs for each market
@@ -188,6 +204,7 @@ export default async function PortfolioPage() {
       v2Snapshots={usV2Snapshots}
       v1Weights={usWeights.v1}
       v2Weights={usWeights.v2}
+      exitReasons={usExitReasons}
       isJapan={false}
       v1Strategy="conservative"
       v2Strategy="aggressive"
@@ -207,6 +224,7 @@ export default async function PortfolioPage() {
       v2Snapshots={jpV2Snapshots}
       v1Weights={jpWeights.v1}
       v2Weights={jpWeights.v2}
+      exitReasons={jpExitReasons}
       isJapan={true}
       v1Strategy="jp_conservative"
       v2Strategy="jp_aggressive"

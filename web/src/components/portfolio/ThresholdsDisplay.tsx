@@ -41,14 +41,39 @@ export function ThresholdsDisplay({ v1Config, v2Config, thresholdHistory }: Thre
         {thresholdHistory.length > 0 && (
           <div className="mt-4 pt-4 border-t border-gray-100">
             <h4 className="text-sm font-medium text-gray-600 mb-2">変更履歴</h4>
-            <div className="space-y-1.5">
-              {thresholdHistory.slice(0, 5).map((h: any, i: number) => (
-                <div key={i} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="strategy" value={h.strategy_mode} />
-                    <span className="text-gray-600">{h.old_threshold} → {h.new_threshold}</span>
+            <div className="space-y-2">
+              {thresholdHistory.slice(0, 10).map((h: any, i: number) => (
+                <div key={i} className="p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="strategy" value={h.strategy_mode} />
+                      <span className="text-sm font-mono text-gray-700">
+                        {h.old_threshold} → {h.new_threshold}
+                      </span>
+                      <span className={`text-xs font-medium ${
+                        h.new_threshold > h.old_threshold ? 'text-orange-600' : 'text-green-600'
+                      }`}>
+                        ({h.new_threshold > h.old_threshold ? '+' : ''}{h.new_threshold - h.old_threshold})
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-400">{h.adjustment_date}</span>
                   </div>
-                  <span className="text-xs text-gray-400">{h.adjustment_date}</span>
+                  {h.reason && (
+                    <p className="text-xs text-gray-500 mt-1">{h.reason}</p>
+                  )}
+                  {(h.missed_opportunities_count != null || h.wfe_score != null) && (
+                    <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                      {h.missed_opportunities_count != null && (
+                        <span>見逃し: {h.missed_opportunities_count}件</span>
+                      )}
+                      {h.missed_avg_return != null && (
+                        <span>見逃し平均: {h.missed_avg_return >= 0 ? '+' : ''}{Number(h.missed_avg_return).toFixed(2)}%</span>
+                      )}
+                      {h.wfe_score != null && (
+                        <span>WFE: {Number(h.wfe_score).toFixed(2)}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -4,6 +4,8 @@ import {
   getMetaInterventions,
   getActivePromptOverrides,
   getReflections,
+  getRollingMetrics,
+  getConfidenceCalibration,
 } from '@/lib/supabase';
 import { PageHeader } from '@/components/ui';
 import { MarketTabs } from '@/components/MarketTabs';
@@ -11,8 +13,18 @@ import {
   JudgmentOutcomesPanel,
   ReflectionPanel,
   MetaMonitorPanel,
+  RollingMetricsPanel,
+  ConfidenceCalibrationChart,
 } from '@/components/insights';
-import type { ReflectionRecord, JudgmentOutcomeStats, OutcomeTrend, MetaIntervention, PromptOverride } from '@/types';
+import type {
+  ReflectionRecord,
+  JudgmentOutcomeStats,
+  OutcomeTrend,
+  MetaIntervention,
+  PromptOverride,
+  RollingMetrics,
+  ConfidenceCalibrationBucket,
+} from '@/types';
 
 export const revalidate = 300;
 
@@ -22,6 +34,8 @@ interface InsightsContentProps {
   reflections: ReflectionRecord[];
   interventions: MetaIntervention[];
   overrides: PromptOverride[];
+  rollingMetrics: RollingMetrics[];
+  calibration: ConfidenceCalibrationBucket[];
   isJapan: boolean;
 }
 
@@ -31,11 +45,15 @@ function InsightsContent({
   reflections,
   interventions,
   overrides,
+  rollingMetrics,
+  calibration,
   isJapan,
 }: InsightsContentProps) {
   return (
     <div className="space-y-10">
+      <RollingMetricsPanel metrics={rollingMetrics} isJapan={isJapan} />
       <JudgmentOutcomesPanel stats={stats} trends={trends} isJapan={isJapan} />
+      <ConfidenceCalibrationChart buckets={calibration} />
       <ReflectionPanel reflections={reflections} isJapan={isJapan} />
       <MetaMonitorPanel interventions={interventions} overrides={overrides} isJapan={isJapan} />
     </div>
@@ -53,6 +71,10 @@ export default async function InsightsPage() {
     jpInterventions,
     usOverrides,
     jpOverrides,
+    usRolling,
+    jpRolling,
+    usCalibration,
+    jpCalibration,
   ] = await Promise.all([
     getJudgmentOutcomeStats('us'),
     getJudgmentOutcomeStats('jp'),
@@ -63,6 +85,10 @@ export default async function InsightsPage() {
     getMetaInterventions('jp', 20),
     getActivePromptOverrides('us'),
     getActivePromptOverrides('jp'),
+    getRollingMetrics('us'),
+    getRollingMetrics('jp'),
+    getConfidenceCalibration('us'),
+    getConfidenceCalibration('jp'),
   ]);
 
   const usContent = (
@@ -72,6 +98,8 @@ export default async function InsightsPage() {
       reflections={reflections}
       interventions={usInterventions}
       overrides={usOverrides}
+      rollingMetrics={usRolling}
+      calibration={usCalibration}
       isJapan={false}
     />
   );
@@ -83,6 +111,8 @@ export default async function InsightsPage() {
       reflections={reflections}
       interventions={jpInterventions}
       overrides={jpOverrides}
+      rollingMetrics={jpRolling}
+      calibration={jpCalibration}
       isJapan={true}
     />
   );

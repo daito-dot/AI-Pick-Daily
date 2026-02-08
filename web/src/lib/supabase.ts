@@ -14,6 +14,9 @@ import type {
   OutcomeTrend,
   MetaIntervention,
   PromptOverride,
+  RollingMetrics,
+  ConfidenceCalibrationBucket,
+  ExitReasonCount,
 } from '@/types';
 
 // Lazy initialization to handle build-time when env vars may not be set
@@ -1341,6 +1344,151 @@ export async function getActivePromptOverrides(
     return (data || []) as PromptOverride[];
   } catch (error) {
     console.error('getActivePromptOverrides error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch latest rolling metrics per strategy
+ */
+export async function getRollingMetrics(
+  marketType: MarketType = 'us'
+): Promise<RollingMetrics[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const results: RollingMetrics[] = [];
+    for (const strategy of strategies) {
+      const { data, error } = await supabase
+        .from('performance_rolling_metrics')
+        .select('*')
+        .eq('strategy_mode', strategy)
+        .order('metric_date', { ascending: false })
+        .limit(1);
+
+      if (!error && data && data.length > 0) {
+        results.push(data[0] as RollingMetrics);
+      }
+    }
+
+    return results;
+  } catch (error) {
+    console.error('getRollingMetrics error:', error);
+    return [];
+  }
+}
+
+/**
+ * Compute confidence calibration from judgment_records + outcomes
+ */
+export async function getConfidenceCalibration(
+  marketType: MarketType = 'us'
+): Promise<ConfidenceCalibrationBucket[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data: judgments, error } = await supabase
+      .from('judgment_records')
+      .select('confidence, decision, judgment_outcomes(outcome_aligned, actual_return_1d)')
+      .in('strategy_mode', strategies);
+
+    if (error || !judgments) {
+      console.error('[getConfidenceCalibration] error:', error);
+      return [];
+    }
+
+    // Bucket: 0.0-0.3, 0.3-0.5, 0.5-0.6, 0.6-0.7, 0.7-0.8, 0.8-0.9, 0.9-1.0
+    const buckets = [
+      { label: '0-30%', min: 0, max: 0.3 },
+      { label: '30-50%', min: 0.3, max: 0.5 },
+      { label: '50-60%', min: 0.5, max: 0.6 },
+      { label: '60-70%', min: 0.6, max: 0.7 },
+      { label: '70-80%', min: 0.7, max: 0.8 },
+      { label: '80-90%', min: 0.8, max: 0.9 },
+      { label: '90-100%', min: 0.9, max: 1.01 },
+    ];
+
+    const bucketData = buckets.map((b) => ({
+      bucket: b.label,
+      bucketMin: b.min,
+      bucketMax: b.max,
+      total: 0,
+      correct: 0,
+      returns: [] as number[],
+    }));
+
+    for (const j of judgments) {
+      const outcomes = j.judgment_outcomes as Array<{
+        outcome_aligned: boolean | null;
+        actual_return_1d: number | null;
+      }>;
+      if (!outcomes || outcomes.length === 0) continue;
+
+      const conf = j.confidence;
+      const bucket = bucketData.find((b) => conf >= b.bucketMin && conf < b.bucketMax);
+      if (!bucket) continue;
+
+      for (const o of outcomes) {
+        bucket.total++;
+        if (o.outcome_aligned) bucket.correct++;
+        if (o.actual_return_1d != null) bucket.returns.push(o.actual_return_1d);
+      }
+    }
+
+    return bucketData
+      .filter((b) => b.total > 0)
+      .map((b) => ({
+        bucket: b.bucket,
+        bucketMin: b.bucketMin,
+        bucketMax: b.bucketMax,
+        total: b.total,
+        correct: b.correct,
+        accuracy: Math.round((b.correct / b.total) * 1000) / 10,
+        avgReturn: b.returns.length > 0
+          ? Math.round(b.returns.reduce((a, c) => a + c, 0) / b.returns.length * 1000) / 1000
+          : 0,
+      }));
+  } catch (error) {
+    console.error('getConfidenceCalibration error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch exit reason distribution from trade history
+ */
+export async function getExitReasonDistribution(
+  marketType: MarketType = 'us',
+  days: number = 90
+): Promise<ExitReasonCount[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data, error } = await supabase
+      .from('trade_history')
+      .select('exit_reason')
+      .in('strategy_mode', strategies)
+      .gte('exit_date', getUTCDateDaysAgo(days));
+
+    if (error || !data) {
+      console.error('[getExitReasonDistribution] error:', error);
+      return [];
+    }
+
+    const counts = new Map<string, number>();
+    for (const row of data) {
+      const reason = row.exit_reason || 'unknown';
+      counts.set(reason, (counts.get(reason) || 0) + 1);
+    }
+
+    return Array.from(counts.entries())
+      .map(([exit_reason, count]) => ({ exit_reason, count }))
+      .sort((a, b) => b.count - a.count);
+  } catch (error) {
+    console.error('getExitReasonDistribution error:', error);
     return [];
   }
 }
