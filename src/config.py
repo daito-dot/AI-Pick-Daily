@@ -63,6 +63,11 @@ class LLMConfig:
     openai_base_url: str = "http://localhost:8000/v1"
     openai_api_key: str = "no-key"
     openai_model: str = ""
+    # OpenRouter for shadow model comparison
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    shadow_models: list[str] = field(default_factory=list)
+    enable_shadow_judgment: bool = False
     # Feature flags
     enable_judgment: bool = True  # Enable LLM-based judgment (Layer 2)
     enable_reflection: bool = True  # Enable reflection analysis (Layer 3)
@@ -113,6 +118,10 @@ def load_config() -> Config:
             openai_base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:8000/v1"),
             openai_api_key=os.getenv("OPENAI_API_KEY", "no-key"),
             openai_model=os.getenv("OPENAI_MODEL", ""),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
+            openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            shadow_models=[m.strip() for m in os.getenv("SHADOW_MODELS", "").split(",") if m.strip()],
+            enable_shadow_judgment=os.getenv("ENABLE_SHADOW_JUDGMENT", "false").lower() == "true",
             enable_judgment=os.getenv("ENABLE_JUDGMENT", "true").lower() == "true",
             enable_reflection=os.getenv("ENABLE_REFLECTION", "true").lower() == "true",
             judgment_thinking_level=os.getenv("JUDGMENT_THINKING_LEVEL", "low"),

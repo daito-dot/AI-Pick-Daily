@@ -1153,6 +1153,7 @@ class SupabaseClient:
         raw_llm_response: str | None = None,
         judged_at: str | None = None,
         market_type: str = "us",
+        is_primary: bool = True,
     ) -> dict[str, Any]:
         """
         Save an LLM judgment record to the database.
@@ -1174,6 +1175,7 @@ class SupabaseClient:
             raw_llm_response: Optional raw response for debugging
             judged_at: Optional timestamp (uses now if not provided)
             market_type: 'us' or 'jp' (default: 'us')
+            is_primary: True for primary model, False for shadow models
 
         Returns:
             Inserted record
@@ -1195,6 +1197,7 @@ class SupabaseClient:
             "model_version": model_version,
             "prompt_version": prompt_version,
             "market_type": market_type,
+            "is_primary": is_primary,
         }
 
         if raw_llm_response:
@@ -1204,7 +1207,7 @@ class SupabaseClient:
 
         result = self._client.table("judgment_records").upsert(
             record,
-            on_conflict="symbol,batch_date,strategy_mode",
+            on_conflict="symbol,batch_date,strategy_mode,model_version",
         ).execute()
 
         return result.data[0] if result.data else {}

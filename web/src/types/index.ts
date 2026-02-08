@@ -284,6 +284,7 @@ export interface PromptOverride {
 export interface JudgmentOutcomeStats {
   strategy_mode: string;
   decision: string;
+  model_version: string;
   total: number;
   correct: number;
   accuracy_pct: number;
@@ -294,6 +295,7 @@ export interface JudgmentOutcomeStats {
 export interface OutcomeTrend {
   batch_date: string;
   strategy_mode: string;
+  model_version: string;
   total: number;
   aligned: number;
   accuracy: number;
@@ -320,6 +322,7 @@ export interface ConfidenceCalibrationBucket {
   correct: number;
   accuracy: number;
   avgReturn: number;
+  model_version: string;
 }
 
 export interface ParameterChangeRecord {

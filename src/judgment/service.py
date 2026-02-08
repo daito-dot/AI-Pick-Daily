@@ -34,15 +34,16 @@ class JudgmentService:
     Records full reasoning trace for later reflection and learning.
     """
 
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(self, llm_client: LLMClient | None = None, model_name: str | None = None):
         """
         Initialize the judgment service.
 
         Args:
             llm_client: Optional LLM client (uses default if not provided)
+            model_name: Optional model name override (uses config default if not provided)
         """
         self.llm_client = llm_client or get_llm_client()
-        self.model_name = config.llm.analysis_model  # gemini-3-flash for thinking mode
+        self.model_name = model_name or config.llm.analysis_model
 
     def judge_stock(
         self,

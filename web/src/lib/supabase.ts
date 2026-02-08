@@ -1169,7 +1169,7 @@ async function getJudgmentOutcomeStatsFallback(
     // Fetch judgment_records with outcomes for these strategies
     const { data: judgments, error } = await supabase
       .from('judgment_records')
-      .select('strategy_mode, decision, id, judgment_outcomes(outcome_aligned, actual_return_1d, actual_return_5d)')
+      .select('strategy_mode, decision, model_version, id, judgment_outcomes(outcome_aligned, actual_return_1d, actual_return_5d)')
       .in('strategy_mode', strategies);
 
     if (error || !judgments) {
@@ -1177,11 +1177,12 @@ async function getJudgmentOutcomeStatsFallback(
       return [];
     }
 
-    // Aggregate manually
+    // Aggregate manually — group by strategy × decision × model
     const groups = new Map<string, { total: number; correct: number; returns1d: number[]; returns5d: number[] }>();
 
     for (const j of judgments) {
-      const key = `${j.strategy_mode}|${j.decision}`;
+      const model = (j.model_version as string) || 'unknown';
+      const key = `${j.strategy_mode}|${j.decision}|${model}`;
       if (!groups.has(key)) {
         groups.set(key, { total: 0, correct: 0, returns1d: [], returns5d: [] });
       }
@@ -1200,10 +1201,11 @@ async function getJudgmentOutcomeStatsFallback(
     const results: JudgmentOutcomeStats[] = [];
     Array.from(groups.entries()).forEach(([key, g]) => {
       if (g.total === 0) return;
-      const [strategy_mode, decision] = key.split('|');
+      const [strategy_mode, decision, model_version] = key.split('|');
       results.push({
         strategy_mode,
         decision,
+        model_version,
         total: g.total,
         correct: g.correct,
         accuracy_pct: Math.round((g.correct / g.total) * 1000) / 10,
@@ -1216,7 +1218,11 @@ async function getJudgmentOutcomeStatsFallback(
       });
     });
 
-    return results.sort((a, b) => a.strategy_mode.localeCompare(b.strategy_mode) || a.decision.localeCompare(b.decision));
+    return results.sort((a, b) =>
+      a.model_version.localeCompare(b.model_version) ||
+      a.strategy_mode.localeCompare(b.strategy_mode) ||
+      a.decision.localeCompare(b.decision)
+    );
   } catch (error) {
     console.error('getJudgmentOutcomeStatsFallback error:', error);
     return [];
@@ -1237,7 +1243,7 @@ export async function getOutcomeTrends(
 
     const { data: judgments, error } = await supabase
       .from('judgment_records')
-      .select('batch_date, strategy_mode, judgment_outcomes(outcome_aligned, actual_return_1d)')
+      .select('batch_date, strategy_mode, model_version, judgment_outcomes(outcome_aligned, actual_return_1d)')
       .in('strategy_mode', strategies)
       .gte('batch_date', startDate)
       .order('batch_date', { ascending: true });
@@ -1247,14 +1253,15 @@ export async function getOutcomeTrends(
       return [];
     }
 
-    // Group by date × strategy
+    // Group by date × strategy × model
     const groups = new Map<string, { total: number; aligned: number; returns: number[] }>();
 
     for (const j of judgments) {
       const outcomes = j.judgment_outcomes as Array<{ outcome_aligned: boolean | null; actual_return_1d: number | null }>;
       if (!outcomes || outcomes.length === 0) continue;
 
-      const key = `${j.batch_date}|${j.strategy_mode}`;
+      const model = (j.model_version as string) || 'unknown';
+      const key = `${j.batch_date}|${j.strategy_mode}|${model}`;
       if (!groups.has(key)) {
         groups.set(key, { total: 0, aligned: 0, returns: [] });
       }
@@ -1269,10 +1276,11 @@ export async function getOutcomeTrends(
     const results: OutcomeTrend[] = [];
     Array.from(groups.entries()).forEach(([key, g]) => {
       if (g.total === 0) return;
-      const [batch_date, strategy_mode] = key.split('|');
+      const [batch_date, strategy_mode, model_version] = key.split('|');
       results.push({
         batch_date,
         strategy_mode,
+        model_version,
         total: g.total,
         aligned: g.aligned,
         accuracy: Math.round((g.aligned / g.total) * 1000) / 10,
@@ -1393,7 +1401,7 @@ export async function getConfidenceCalibration(
 
     const { data: judgments, error } = await supabase
       .from('judgment_records')
-      .select('confidence, decision, judgment_outcomes(outcome_aligned, actual_return_1d)')
+      .select('confidence, decision, model_version, judgment_outcomes(outcome_aligned, actual_return_1d)')
       .in('strategy_mode', strategies);
 
     if (error || !judgments) {
@@ -1402,7 +1410,7 @@ export async function getConfidenceCalibration(
     }
 
     // Bucket: 0.0-0.3, 0.3-0.5, 0.5-0.6, 0.6-0.7, 0.7-0.8, 0.8-0.9, 0.9-1.0
-    const buckets = [
+    const bucketDefs = [
       { label: '0-30%', min: 0, max: 0.3 },
       { label: '30-50%', min: 0.3, max: 0.5 },
       { label: '50-60%', min: 0.5, max: 0.6 },
@@ -1412,14 +1420,8 @@ export async function getConfidenceCalibration(
       { label: '90-100%', min: 0.9, max: 1.01 },
     ];
 
-    const bucketData = buckets.map((b) => ({
-      bucket: b.label,
-      bucketMin: b.min,
-      bucketMax: b.max,
-      total: 0,
-      correct: 0,
-      returns: [] as number[],
-    }));
+    // Group by model × bucket
+    const modelBuckets = new Map<string, Map<string, { total: number; correct: number; returns: number[]; min: number; max: number }>>();
 
     for (const j of judgments) {
       const outcomes = j.judgment_outcomes as Array<{
@@ -1428,9 +1430,19 @@ export async function getConfidenceCalibration(
       }>;
       if (!outcomes || outcomes.length === 0) continue;
 
+      const model = (j.model_version as string) || 'unknown';
       const conf = j.confidence;
-      const bucket = bucketData.find((b) => conf >= b.bucketMin && conf < b.bucketMax);
-      if (!bucket) continue;
+      const bDef = bucketDefs.find((b) => conf >= b.min && conf < b.max);
+      if (!bDef) continue;
+
+      if (!modelBuckets.has(model)) {
+        modelBuckets.set(model, new Map());
+      }
+      const mBuckets = modelBuckets.get(model)!;
+      if (!mBuckets.has(bDef.label)) {
+        mBuckets.set(bDef.label, { total: 0, correct: 0, returns: [], min: bDef.min, max: bDef.max });
+      }
+      const bucket = mBuckets.get(bDef.label)!;
 
       for (const o of outcomes) {
         bucket.total++;
@@ -1439,19 +1451,26 @@ export async function getConfidenceCalibration(
       }
     }
 
-    return bucketData
-      .filter((b) => b.total > 0)
-      .map((b) => ({
-        bucket: b.bucket,
-        bucketMin: b.bucketMin,
-        bucketMax: b.bucketMax,
-        total: b.total,
-        correct: b.correct,
-        accuracy: Math.round((b.correct / b.total) * 1000) / 10,
-        avgReturn: b.returns.length > 0
-          ? Math.round(b.returns.reduce((a, c) => a + c, 0) / b.returns.length * 1000) / 1000
-          : 0,
-      }));
+    const results: ConfidenceCalibrationBucket[] = [];
+    for (const [model, mBuckets] of Array.from(modelBuckets.entries())) {
+      for (const [label, b] of Array.from(mBuckets.entries())) {
+        if (b.total === 0) continue;
+        results.push({
+          bucket: label,
+          bucketMin: b.min,
+          bucketMax: b.max,
+          total: b.total,
+          correct: b.correct,
+          accuracy: Math.round((b.correct / b.total) * 1000) / 10,
+          avgReturn: b.returns.length > 0
+            ? Math.round(b.returns.reduce((a, c) => a + c, 0) / b.returns.length * 1000) / 1000
+            : 0,
+          model_version: model,
+        });
+      }
+    }
+
+    return results;
   } catch (error) {
     console.error('getConfidenceCalibration error:', error);
     return [];

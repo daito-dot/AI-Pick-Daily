@@ -540,6 +540,7 @@ def run_portfolio_judgment(
     yfinance: "YFinanceClient | None" = None,
     performance_stats: dict | None = None,
     weekly_research: str | None = None,
+    is_primary: bool = True,
 ) -> PortfolioJudgmentOutput:
     """Run portfolio-level judgment on all candidates at once.
 
@@ -604,16 +605,19 @@ def run_portfolio_judgment(
 
     # Save individual judgment records for each recommended buy
     # (needed for judgment_outcomes feedback loop)
+    model_ver = judgment_service.model_name
     for alloc in result.recommended_buys:
         _save_portfolio_allocation_as_judgment(
             supabase, alloc, strategy_mode, market_regime, batch_date,
             decision="buy", portfolio_reasoning=result.portfolio_reasoning,
+            model_version=model_ver, is_primary=is_primary,
         )
 
     for alloc in result.skipped:
         _save_portfolio_allocation_as_judgment(
             supabase, alloc, strategy_mode, market_regime, batch_date,
             decision="avoid", portfolio_reasoning=result.portfolio_reasoning,
+            model_version=model_ver, is_primary=is_primary,
         )
 
     return result
@@ -627,6 +631,8 @@ def _save_portfolio_allocation_as_judgment(
     batch_date: str,
     decision: str,
     portfolio_reasoning: str,
+    model_version: str = "",
+    is_primary: bool = True,
 ) -> None:
     """Save a portfolio allocation as a judgment record for outcome tracking."""
     market_type = "jp" if strategy_mode.startswith("jp_") else "us"
@@ -652,11 +658,12 @@ def _save_portfolio_allocation_as_judgment(
             identified_risks=[],
             market_regime=market_regime,
             input_summary=f"Portfolio judgment: {alloc.action} ({alloc.allocation_hint})",
-            model_version="",
+            model_version=model_version,
             prompt_version="v2_portfolio",
             raw_llm_response=None,
             judged_at=datetime.now().isoformat(),
             market_type=market_type,
+            is_primary=is_primary,
         )
     except Exception as e:
         logger.warning(f"Failed to save judgment record for {alloc.symbol}: {e}")

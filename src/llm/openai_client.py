@@ -57,13 +57,18 @@ def retry_on_error(max_retries: int = 3, base_sleep: float = 2.0):
 class OpenAIClient(LLMClient):
     """OpenAI-compatible API client for arbitrary model endpoints."""
 
-    def __init__(self):
-        self._base_url = config.llm.openai_base_url.rstrip("/")
-        self._api_key = config.llm.openai_api_key
-        self._default_model = config.llm.openai_model
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        default_model: str | None = None,
+    ):
+        self._base_url = (base_url or config.llm.openai_base_url).rstrip("/")
+        self._api_key = api_key or config.llm.openai_api_key
+        self._default_model = default_model or config.llm.openai_model
         if not self._default_model:
             raise ValueError(
-                "OPENAI_MODEL must be set when using openai provider. "
+                "Model must be specified either via parameter or OPENAI_MODEL env var. "
                 "Example: meta-llama/Llama-3.3-70B-Instruct"
             )
         self._client = httpx.Client(

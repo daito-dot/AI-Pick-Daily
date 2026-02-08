@@ -20,9 +20,27 @@ interface JudgmentOutcomesPanelProps {
   isJapan: boolean;
 }
 
+function shortenModel(name: string): string {
+  return name
+    .replace('models/', '')
+    .replace('-preview', '')
+    .replace('-instruct', '');
+}
+
+// Distinct colors for model lines
+const MODEL_COLORS = [
+  '#3B82F6', '#F97316', '#8B5CF6', '#10B981', '#EF4444',
+  '#EC4899', '#06B6D4', '#F59E0B', '#6366F1', '#14B8A6',
+];
+
 export function JudgmentOutcomesPanel({ stats, trends, isJapan }: JudgmentOutcomesPanelProps) {
-  const v1Strategy = isJapan ? 'jp_conservative' : 'conservative';
-  const v2Strategy = isJapan ? 'jp_aggressive' : 'aggressive';
+  // Detect unique models
+  const models = useMemo(() => {
+    const set = new Set(stats.map((s) => s.model_version));
+    return Array.from(set).sort();
+  }, [stats]);
+
+  const hasMultipleModels = models.length > 1;
 
   const summary = useMemo(() => {
     const byDecision = (decision: string) => {
@@ -41,18 +59,30 @@ export function JudgmentOutcomesPanel({ stats, trends, isJapan }: JudgmentOutcom
     };
   }, [stats]);
 
+  // Build chart data: one line per model (aggregating strategies)
   const chartData = useMemo(() => {
+    const trendModels = Array.from(new Set(trends.map((t) => t.model_version))).sort();
     const dates = Array.from(new Set(trends.map((t) => t.batch_date))).sort();
+
     return dates.map((date) => {
-      const v1 = trends.find((t) => t.batch_date === date && t.strategy_mode === v1Strategy);
-      const v2 = trends.find((t) => t.batch_date === date && t.strategy_mode === v2Strategy);
-      return {
-        date: date.slice(5), // MM-DD
-        v1Accuracy: v1?.accuracy ?? null,
-        v2Accuracy: v2?.accuracy ?? null,
-      };
+      const point: Record<string, string | number | null> = { date: date.slice(5) };
+      for (const model of trendModels) {
+        const items = trends.filter((t) => t.batch_date === date && t.model_version === model);
+        if (items.length > 0) {
+          const totalAll = items.reduce((a, b) => a + b.total, 0);
+          const alignedAll = items.reduce((a, b) => a + b.aligned, 0);
+          point[model] = totalAll > 0 ? Math.round((alignedAll / totalAll) * 1000) / 10 : null;
+        } else {
+          point[model] = null;
+        }
+      }
+      return point;
     });
-  }, [trends, v1Strategy, v2Strategy]);
+  }, [trends]);
+
+  const trendModels = useMemo(() =>
+    Array.from(new Set(trends.map((t) => t.model_version))).sort(),
+  [trends]);
 
   if (stats.length === 0) {
     return (
@@ -94,13 +124,18 @@ export function JudgmentOutcomesPanel({ stats, trends, isJapan }: JudgmentOutcom
         />
       </div>
 
-      {/* Detail Table */}
+      {/* Detail Table — now includes model column */}
       <Card>
-        <h4 className="text-sm font-semibold text-gray-700 mb-3">戦略 x 判断 詳細</h4>
+        <h4 className="text-sm font-semibold text-gray-700 mb-3">
+          {hasMultipleModels ? 'モデル x 戦略 x 判断 詳細' : '戦略 x 判断 詳細'}
+        </h4>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
+                {hasMultipleModels && (
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">モデル</th>
+                )}
                 <th className="text-left py-2 px-3 text-gray-500 font-medium">戦略</th>
                 <th className="text-left py-2 px-3 text-gray-500 font-medium">判断</th>
                 <th className="text-right py-2 px-3 text-gray-500 font-medium">件数</th>
@@ -112,7 +147,12 @@ export function JudgmentOutcomesPanel({ stats, trends, isJapan }: JudgmentOutcom
             </thead>
             <tbody>
               {stats.map((row) => (
-                <tr key={`${row.strategy_mode}-${row.decision}`} className="border-b border-gray-50 hover:bg-gray-50">
+                <tr key={`${row.model_version}-${row.strategy_mode}-${row.decision}`} className="border-b border-gray-50 hover:bg-gray-50">
+                  {hasMultipleModels && (
+                    <td className="py-2 px-3 font-mono text-xs text-gray-600 max-w-[140px] truncate" title={row.model_version}>
+                      {shortenModel(row.model_version)}
+                    </td>
+                  )}
                   <td className="py-2 px-3">
                     <Badge variant="strategy" value={row.strategy_mode} />
                   </td>
@@ -147,7 +187,7 @@ export function JudgmentOutcomesPanel({ stats, trends, isJapan }: JudgmentOutcom
         </div>
       </Card>
 
-      {/* Trend Chart */}
+      {/* Trend Chart — one line per model */}
       {chartData.length > 1 && (
         <Card>
           <h4 className="text-sm font-semibold text-gray-700 mb-3">精度推移（直近30日）</h4>
@@ -158,24 +198,18 @@ export function JudgmentOutcomesPanel({ stats, trends, isJapan }: JudgmentOutcom
               <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
               <Tooltip formatter={(value: number) => [`${value.toFixed(1)}%`, '']} />
               <Legend />
-              <Line
-                type="monotone"
-                dataKey="v1Accuracy"
-                name="V1 Conservative"
-                stroke="#3B82F6"
-                strokeWidth={2}
-                dot={{ r: 2 }}
-                connectNulls
-              />
-              <Line
-                type="monotone"
-                dataKey="v2Accuracy"
-                name="V2 Aggressive"
-                stroke="#F97316"
-                strokeWidth={2}
-                dot={{ r: 2 }}
-                connectNulls
-              />
+              {trendModels.map((model, i) => (
+                <Line
+                  key={model}
+                  type="monotone"
+                  dataKey={model}
+                  name={shortenModel(model)}
+                  stroke={MODEL_COLORS[i % MODEL_COLORS.length]}
+                  strokeWidth={2}
+                  dot={{ r: 2 }}
+                  connectNulls
+                />
+              ))}
             </LineChart>
           </ResponsiveContainer>
         </Card>

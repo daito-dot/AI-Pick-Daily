@@ -225,6 +225,28 @@ def run_llm_judgment_phase(
         judgment_ctx.total_items = stats.total_candidates
         BatchLogger.finish(judgment_ctx)
 
+        # Run shadow model judgments (non-blocking, failures logged only)
+        try:
+            _run_shadow_judgments(
+                v1_candidates=v1_candidates,
+                v2_candidates=v2_candidates,
+                v1_positions=v1_positions,
+                v2_positions=v2_positions,
+                v1_slots=v1_slots,
+                v2_slots=v2_slots,
+                market_regime_str=market_regime_str,
+                market_config=market_config,
+                today=today,
+                finnhub=finnhub,
+                yfinance=yfinance,
+                supabase=supabase,
+                v1_perf_stats=v1_perf_stats,
+                v2_perf_stats=v2_perf_stats,
+                weekly_research_text=weekly_research_text,
+            )
+        except Exception as e:
+            logger.warning(f"Shadow judgments failed (non-critical): {e}")
+
     except Exception as e:
         # No fallback: propagate error after logging
         logger.error(f"LLM judgment failed: {e}")
@@ -348,3 +370,114 @@ def _format_weekly_research(supabase) -> str | None:
     except Exception as e:
         logger.warning(f"Failed to format weekly research: {e}")
         return None
+
+
+def _run_shadow_judgments(
+    v1_candidates: list,
+    v2_candidates: list,
+    v1_positions: list,
+    v2_positions: list,
+    v1_slots: int,
+    v2_slots: int,
+    market_regime_str: str,
+    market_config: MarketConfig,
+    today: str,
+    finnhub=None,
+    yfinance=None,
+    supabase=None,
+    v1_perf_stats=None,
+    v2_perf_stats=None,
+    weekly_research_text=None,
+) -> None:
+    """Run shadow model judgments sequentially for comparison.
+
+    Shadow results are saved to judgment_records with is_primary=FALSE.
+    Failures do NOT affect the primary pipeline.
+    """
+    if not config.llm.enable_shadow_judgment:
+        return
+
+    shadow_models = config.llm.shadow_models
+    if not shadow_models:
+        logger.info("Shadow judgment enabled but no shadow models configured")
+        return
+
+    if not config.llm.openrouter_api_key:
+        logger.warning("Shadow judgment enabled but OPENROUTER_API_KEY not set")
+        return
+
+    from src.llm.openai_client import OpenAIClient
+
+    logger.info(f"Starting shadow judgments with {len(shadow_models)} models")
+
+    for model_id in shadow_models:
+        try:
+            logger.info(f"Shadow judgment: {model_id}")
+
+            shadow_client = OpenAIClient(
+                base_url=config.llm.openrouter_base_url,
+                api_key=config.llm.openrouter_api_key,
+                default_model=model_id,
+            )
+            shadow_service = JudgmentService(
+                llm_client=shadow_client,
+                model_name=model_id,
+            )
+
+            # V1 shadow judgment
+            if v1_candidates and v1_slots > 0:
+                try:
+                    v1_result = run_portfolio_judgment(
+                        judgment_service=shadow_service,
+                        supabase=supabase,
+                        candidates=v1_candidates,
+                        strategy_mode=market_config.v1_strategy_mode,
+                        market_regime=market_regime_str,
+                        batch_date=today,
+                        current_positions=v1_positions,
+                        available_slots=v1_slots,
+                        available_cash=100000,
+                        finnhub=finnhub,
+                        yfinance=yfinance,
+                        performance_stats=v1_perf_stats,
+                        weekly_research=weekly_research_text,
+                        is_primary=False,
+                    )
+                    logger.info(
+                        f"Shadow {model_id} [{market_config.v1_strategy_mode}]: "
+                        f"{len(v1_result.recommended_buys)} buys"
+                    )
+                except Exception as e:
+                    logger.warning(f"Shadow {model_id} V1 failed: {e}")
+
+            # V2 shadow judgment
+            if v2_candidates and v2_slots > 0:
+                try:
+                    v2_result = run_portfolio_judgment(
+                        judgment_service=shadow_service,
+                        supabase=supabase,
+                        candidates=v2_candidates,
+                        strategy_mode=market_config.v2_strategy_mode,
+                        market_regime=market_regime_str,
+                        batch_date=today,
+                        current_positions=v2_positions,
+                        available_slots=v2_slots,
+                        available_cash=100000,
+                        finnhub=finnhub,
+                        yfinance=yfinance,
+                        performance_stats=v2_perf_stats,
+                        weekly_research=weekly_research_text,
+                        is_primary=False,
+                    )
+                    logger.info(
+                        f"Shadow {model_id} [{market_config.v2_strategy_mode}]: "
+                        f"{len(v2_result.recommended_buys)} buys"
+                    )
+                except Exception as e:
+                    logger.warning(f"Shadow {model_id} V2 failed: {e}")
+
+        except Exception as e:
+            logger.warning(f"Failed to initialize shadow model {model_id}: {e}")
+            continue
+
+    logger.info("Shadow judgments complete")
