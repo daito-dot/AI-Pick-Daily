@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 INITIAL_CAPITAL = 100000.0  # ¥100,000
 MAX_POSITIONS = 10
 STOP_LOSS_PCT = -7.0
-TAKE_PROFIT_PCT = 15.0
+TAKE_PROFIT_PCT = 8.0  # Lowered from 15% — 15% unreachable in 10-day hold
 MAX_HOLD_DAYS = 10
 ABSOLUTE_MAX_HOLD_DAYS = 15  # Hard limit even if AI says hold
 RISK_FREE_RATE = 0.02  # Annual risk-free rate for Sharpe calculation
@@ -685,19 +685,19 @@ class PortfolioManager:
 
             soft_trigger = None
 
-            # 4. Take Profit
+            # 4. Take Profit (priority: highest among soft exits)
             if pnl_pct >= TAKE_PROFIT_PCT:
                 soft_trigger = "take_profit"
 
-            # 5. Score Drop
-            elif current_scores:
+            # 5. Score Drop (only if take_profit didn't fire)
+            if soft_trigger is None and current_scores:
                 current_score = current_scores.get(position.symbol)
                 threshold = thresholds.get(position.strategy_mode, 60)
                 if current_score is not None and current_score < threshold:
                     soft_trigger = "score_drop"
 
-            # 6. Max Hold
-            elif position.hold_days >= MAX_HOLD_DAYS:
+            # 6. Max Hold (independent check — was skipped when current_scores existed)
+            if soft_trigger is None and position.hold_days >= MAX_HOLD_DAYS:
                 soft_trigger = "max_hold"
 
             if soft_trigger is None:
