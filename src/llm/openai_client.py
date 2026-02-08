@@ -125,6 +125,38 @@ class OpenAIClient(LLMClient):
             raw_response=data,
         )
 
+    # Thinking level → generation parameters
+    THINKING_PARAMS: dict[str, dict] = {
+        "minimal": {"temperature": 0.7, "max_tokens": 4096, "system": ""},
+        "low": {
+            "temperature": 0.5,
+            "max_tokens": 8192,
+            "system": (
+                "Think through this step-by-step before giving your final answer. "
+                "Show your reasoning process, then provide the final output.\n\n"
+            ),
+        },
+        "medium": {
+            "temperature": 0.3,
+            "max_tokens": 12288,
+            "system": (
+                "Analyze this problem carefully and thoroughly. Consider multiple angles, "
+                "weigh the evidence for and against each conclusion, identify uncertainties, "
+                "then present your well-reasoned final answer.\n\n"
+            ),
+        },
+        "high": {
+            "temperature": 0.2,
+            "max_tokens": 16384,
+            "system": (
+                "This requires deep, rigorous analysis. Systematically examine all relevant factors, "
+                "consider counterarguments, assess confidence levels for each claim, "
+                "identify what you're uncertain about, and only then provide your final answer "
+                "with explicit confidence ratings.\n\n"
+            ),
+        },
+    }
+
     @retry_on_error(max_retries=3, base_sleep=2.0)
     def generate_with_thinking(
         self,
@@ -132,26 +164,30 @@ class OpenAIClient(LLMClient):
         model: str | None = None,
         thinking_level: str = "low",
     ) -> LLMResponse:
-        """Generate with thinking — falls back to standard generation.
+        """Generate with thinking mode.
 
-        Most OSS models don't have a native thinking mode, so we simulate it
-        by prepending a think-step-by-step instruction to the prompt.
+        Maps thinking_level to appropriate temperature, max_tokens, and
+        system prompt depth. For models that produce <think> tags natively
+        (e.g. DeepSeek-R1), the tags are stripped from the final output.
+
+        Args:
+            prompt: The input prompt
+            model: Model override
+            thinking_level: "minimal", "low", "medium", "high"
         """
         model_name = model or self._default_model
+        params = self.THINKING_PARAMS.get(thinking_level, self.THINKING_PARAMS["low"])
 
-        thinking_instruction = (
-            "Think through this step-by-step before giving your final answer. "
-            "Show your reasoning process, then provide the final output.\n\n"
-        )
+        messages: list[dict] = []
+        if params["system"]:
+            messages.append({"role": "system", "content": params["system"]})
+        messages.append({"role": "user", "content": prompt})
 
         payload: dict = {
             "model": model_name,
-            "messages": [
-                {"role": "system", "content": thinking_instruction},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 8192,
+            "messages": messages,
+            "temperature": params["temperature"],
+            "max_tokens": params["max_tokens"],
         }
 
         response = self._client.post("/chat/completions", json=payload)
@@ -159,6 +195,10 @@ class OpenAIClient(LLMClient):
         data = response.json()
 
         content = data["choices"][0]["message"]["content"]
+
+        # Strip native <think> blocks (DeepSeek-R1, QwQ, etc.)
+        content = self._strip_think_tags(content)
+
         usage_data = data.get("usage")
         usage = None
         if usage_data:
@@ -174,3 +214,9 @@ class OpenAIClient(LLMClient):
             usage=usage,
             raw_response=data,
         )
+
+    @staticmethod
+    def _strip_think_tags(text: str) -> str:
+        """Remove <think>...</think> blocks from model output."""
+        import re
+        return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()

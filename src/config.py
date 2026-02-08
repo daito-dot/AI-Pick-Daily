@@ -2,6 +2,7 @@
 AI Pick Daily - Configuration Management
 
 Centralized configuration using environment variables.
+Model defaults are defined once here as constants (Single Source of Truth).
 """
 import os
 from dataclasses import dataclass, field
@@ -11,6 +12,13 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file (does NOT override existing vars)
 load_dotenv(override=False)
+
+
+# ── Model Defaults (Single Source of Truth) ──────────────────
+DEFAULT_SCORING_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_ANALYSIS_MODEL = "gemini-3-flash-preview"
+DEFAULT_REFLECTION_MODEL = "gemini-3-pro-preview"
+DEFAULT_DEEP_RESEARCH_MODEL = "gemini-3-pro-preview"
 
 
 # Strategy mode types
@@ -52,11 +60,10 @@ class StrategyConfig:
 class LLMConfig:
     """LLM-related configuration."""
     provider: Literal["gemini", "claude", "openai"] = "gemini"
-    scoring_model: str = "gemini-2.5-flash-lite"
-    analysis_model: str = "gemini-3-flash-preview"  # For judgment (Layer 2)
-    reflection_model: str = "gemini-3-pro-preview"  # For reflection (Layer 3)
-    deep_research_model: str = "gemini-3-pro-preview"  # For deep research (Layer 4) - fallback
-    deep_research_agent: str = "deep-research-pro-preview-12-2025"  # Deep Research agent
+    scoring_model: str = DEFAULT_SCORING_MODEL
+    analysis_model: str = DEFAULT_ANALYSIS_MODEL       # Layer 2: Judgment
+    reflection_model: str = DEFAULT_REFLECTION_MODEL    # Layer 3: Reflection
+    deep_research_model: str = DEFAULT_DEEP_RESEARCH_MODEL  # Layer 4: Research
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
     # OpenAI-compatible endpoint (vLLM, Ollama, Together AI, etc.)
@@ -108,11 +115,10 @@ def load_config() -> Config:
     return Config(
         llm=LLMConfig(
             provider=os.getenv("LLM_PROVIDER", "gemini"),  # type: ignore
-            scoring_model=os.getenv("SCORING_MODEL", "gemini-2.5-flash-lite"),
-            analysis_model=os.getenv("ANALYSIS_MODEL", "gemini-3-flash-preview"),
-            reflection_model=os.getenv("REFLECTION_MODEL", "gemini-3-pro-preview"),
-            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", "gemini-3-pro-preview"),
-            deep_research_agent=os.getenv("DEEP_RESEARCH_AGENT", "deep-research-pro-preview-12-2025"),
+            scoring_model=os.getenv("SCORING_MODEL", DEFAULT_SCORING_MODEL),
+            analysis_model=os.getenv("ANALYSIS_MODEL", DEFAULT_ANALYSIS_MODEL),
+            reflection_model=os.getenv("REFLECTION_MODEL", DEFAULT_REFLECTION_MODEL),
+            deep_research_model=os.getenv("DEEP_RESEARCH_MODEL", DEFAULT_DEEP_RESEARCH_MODEL),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             openai_base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:8000/v1"),
