@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: '/', label: 'Dashboard' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/analytics', label: 'Analytics' },
+  { href: '/insights', label: 'Insights' },
 ];
 
 interface NavBarProps {

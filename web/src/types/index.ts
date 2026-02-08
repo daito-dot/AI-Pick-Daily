@@ -254,3 +254,48 @@ export interface SystemStatus {
   eveningReview: BatchExecutionLog | null;
   weeklyResearch: BatchExecutionLog | null;
 }
+
+// Meta-Monitor types
+export interface MetaIntervention {
+  id: number;
+  strategy_mode: string;
+  intervention_date: string;
+  trigger_type: string;
+  diagnosis: Record<string, unknown>;
+  actions_taken: Array<Record<string, unknown>>;
+  pre_metrics: Record<string, number>;
+  post_metrics: Record<string, number> | null;
+  effectiveness_score: number | null;
+  rolled_back: boolean;
+  cooldown_until: string | null;
+  created_at: string;
+}
+
+export interface PromptOverride {
+  id: number;
+  strategy_mode: string;
+  override_text: string;
+  reason: string;
+  active: boolean;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface JudgmentOutcomeStats {
+  strategy_mode: string;
+  decision: string;
+  total: number;
+  correct: number;
+  accuracy_pct: number;
+  avg_return_1d: number | null;
+  avg_return_5d: number | null;
+}
+
+export interface OutcomeTrend {
+  batch_date: string;
+  strategy_mode: string;
+  total: number;
+  aligned: number;
+  accuracy: number;
+  avg_return: number;
+}

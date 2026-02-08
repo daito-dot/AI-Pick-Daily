@@ -10,6 +10,10 @@ import type {
   PerformanceStats,
   FactorWeights,
   PortfolioSummaryWithRisk,
+  JudgmentOutcomeStats,
+  OutcomeTrend,
+  MetaIntervention,
+  PromptOverride,
 } from '@/types';
 
 // Lazy initialization to handle build-time when env vars may not be set
@@ -1116,6 +1120,227 @@ export async function getBatchExecutionHistory(days: number = 7): Promise<BatchE
     return data || [];
   } catch (error) {
     console.error('getBatchExecutionHistory error:', error);
+    return [];
+  }
+}
+
+// ============================================
+// Insights Page Functions
+// ============================================
+
+/**
+ * Fetch judgment outcome stats grouped by strategy × decision
+ */
+export async function getJudgmentOutcomeStats(
+  marketType: MarketType = 'us'
+): Promise<JudgmentOutcomeStats[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data, error } = await supabase.rpc('get_judgment_outcome_stats', {
+      strategy_modes: strategies,
+    });
+
+    if (error) {
+      // Fallback: query directly if RPC doesn't exist
+      console.warn('[getJudgmentOutcomeStats] RPC not available, using direct query');
+      return await getJudgmentOutcomeStatsFallback(marketType);
+    }
+
+    return data || [];
+  } catch {
+    return await getJudgmentOutcomeStatsFallback(marketType);
+  }
+}
+
+async function getJudgmentOutcomeStatsFallback(
+  marketType: MarketType
+): Promise<JudgmentOutcomeStats[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    // Fetch judgment_records with outcomes for these strategies
+    const { data: judgments, error } = await supabase
+      .from('judgment_records')
+      .select('strategy_mode, decision, id, judgment_outcomes(outcome_aligned, actual_return_1d, actual_return_5d)')
+      .in('strategy_mode', strategies);
+
+    if (error || !judgments) {
+      console.error('[getJudgmentOutcomeStatsFallback] error:', error);
+      return [];
+    }
+
+    // Aggregate manually
+    const groups = new Map<string, { total: number; correct: number; returns1d: number[]; returns5d: number[] }>();
+
+    for (const j of judgments) {
+      const key = `${j.strategy_mode}|${j.decision}`;
+      if (!groups.has(key)) {
+        groups.set(key, { total: 0, correct: 0, returns1d: [], returns5d: [] });
+      }
+      const g = groups.get(key)!;
+      const outcomes = j.judgment_outcomes as Array<{ outcome_aligned: boolean | null; actual_return_1d: number | null; actual_return_5d: number | null }>;
+      if (outcomes && outcomes.length > 0) {
+        for (const o of outcomes) {
+          g.total++;
+          if (o.outcome_aligned) g.correct++;
+          if (o.actual_return_1d != null) g.returns1d.push(o.actual_return_1d);
+          if (o.actual_return_5d != null) g.returns5d.push(o.actual_return_5d);
+        }
+      }
+    }
+
+    const results: JudgmentOutcomeStats[] = [];
+    Array.from(groups.entries()).forEach(([key, g]) => {
+      if (g.total === 0) return;
+      const [strategy_mode, decision] = key.split('|');
+      results.push({
+        strategy_mode,
+        decision,
+        total: g.total,
+        correct: g.correct,
+        accuracy_pct: Math.round((g.correct / g.total) * 1000) / 10,
+        avg_return_1d: g.returns1d.length > 0
+          ? Math.round(g.returns1d.reduce((a, b) => a + b, 0) / g.returns1d.length * 1000) / 1000
+          : null,
+        avg_return_5d: g.returns5d.length > 0
+          ? Math.round(g.returns5d.reduce((a, b) => a + b, 0) / g.returns5d.length * 1000) / 1000
+          : null,
+      });
+    });
+
+    return results.sort((a, b) => a.strategy_mode.localeCompare(b.strategy_mode) || a.decision.localeCompare(b.decision));
+  } catch (error) {
+    console.error('getJudgmentOutcomeStatsFallback error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch outcome accuracy trends over time
+ */
+export async function getOutcomeTrends(
+  marketType: MarketType = 'us',
+  days: number = 30
+): Promise<OutcomeTrend[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+    const startDate = getUTCDateDaysAgo(days);
+
+    const { data: judgments, error } = await supabase
+      .from('judgment_records')
+      .select('batch_date, strategy_mode, judgment_outcomes(outcome_aligned, actual_return_1d)')
+      .in('strategy_mode', strategies)
+      .gte('batch_date', startDate)
+      .order('batch_date', { ascending: true });
+
+    if (error || !judgments) {
+      console.error('[getOutcomeTrends] error:', error);
+      return [];
+    }
+
+    // Group by date × strategy
+    const groups = new Map<string, { total: number; aligned: number; returns: number[] }>();
+
+    for (const j of judgments) {
+      const outcomes = j.judgment_outcomes as Array<{ outcome_aligned: boolean | null; actual_return_1d: number | null }>;
+      if (!outcomes || outcomes.length === 0) continue;
+
+      const key = `${j.batch_date}|${j.strategy_mode}`;
+      if (!groups.has(key)) {
+        groups.set(key, { total: 0, aligned: 0, returns: [] });
+      }
+      const g = groups.get(key)!;
+      for (const o of outcomes) {
+        g.total++;
+        if (o.outcome_aligned) g.aligned++;
+        if (o.actual_return_1d != null) g.returns.push(o.actual_return_1d);
+      }
+    }
+
+    const results: OutcomeTrend[] = [];
+    Array.from(groups.entries()).forEach(([key, g]) => {
+      if (g.total === 0) return;
+      const [batch_date, strategy_mode] = key.split('|');
+      results.push({
+        batch_date,
+        strategy_mode,
+        total: g.total,
+        aligned: g.aligned,
+        accuracy: Math.round((g.aligned / g.total) * 1000) / 10,
+        avg_return: g.returns.length > 0
+          ? Math.round(g.returns.reduce((a, b) => a + b, 0) / g.returns.length * 1000) / 1000
+          : 0,
+      });
+    });
+
+    return results.sort((a, b) => a.batch_date.localeCompare(b.batch_date));
+  } catch (error) {
+    console.error('getOutcomeTrends error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch meta-monitor interventions
+ */
+export async function getMetaInterventions(
+  marketType: MarketType = 'us',
+  limit: number = 20
+): Promise<MetaIntervention[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data, error } = await supabase
+      .from('meta_interventions')
+      .select('*')
+      .in('strategy_mode', strategies)
+      .order('intervention_date', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('[getMetaInterventions] error:', error);
+      return [];
+    }
+
+    return (data || []) as MetaIntervention[];
+  } catch (error) {
+    console.error('getMetaInterventions error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch active prompt overrides
+ */
+export async function getActivePromptOverrides(
+  marketType: MarketType = 'us'
+): Promise<PromptOverride[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('prompt_overrides')
+      .select('*')
+      .in('strategy_mode', strategies)
+      .eq('active', true)
+      .gte('expires_at', now)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[getActivePromptOverrides] error:', error);
+      return [];
+    }
+
+    return (data || []) as PromptOverride[];
+  } catch (error) {
+    console.error('getActivePromptOverrides error:', error);
     return [];
   }
 }
