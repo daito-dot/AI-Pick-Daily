@@ -17,6 +17,7 @@ from .models import (
     JudgmentOutput, KeyFactor, ReasoningTrace,
     PortfolioCandidateSummary, PortfolioHolding,
     PortfolioJudgmentOutput, StockAllocation,
+    RiskAssessment, PortfolioRiskOutput, EnsembleResult,
 )
 
 
@@ -616,7 +617,7 @@ def run_portfolio_judgment(
     for alloc in result.skipped:
         _save_portfolio_allocation_as_judgment(
             supabase, alloc, strategy_mode, market_regime, batch_date,
-            decision="avoid", portfolio_reasoning=result.portfolio_reasoning,
+            decision="skip", portfolio_reasoning=result.portfolio_reasoning,
             model_version=model_ver, is_primary=is_primary,
         )
 
@@ -667,3 +668,171 @@ def _save_portfolio_allocation_as_judgment(
         )
     except Exception as e:
         logger.warning(f"Failed to save judgment record for {alloc.symbol}: {e}")
+
+
+def _fetch_news_for_candidates(
+    candidates: list[tuple[StockDataLike, ScoredStockLike]],
+    summaries: list[PortfolioCandidateSummary],
+    finnhub: FinnhubClient | None,
+    yfinance: "YFinanceClient | None" = None,
+    max_news_symbols: int = 10,
+) -> dict[str, list[dict]]:
+    """Fetch news for top candidates and inject into summaries.
+
+    Returns:
+        Dict mapping symbol -> list of news dicts
+    """
+    top_symbols = [
+        s.symbol for s in sorted(
+            summaries, key=lambda x: x.composite_score, reverse=True
+        )[:max_news_symbols]
+    ]
+    news_by_symbol: dict[str, list[dict]] = {}
+    for symbol in top_symbols:
+        news = fetch_news_for_judgment(finnhub, symbol, yfinance=yfinance)
+        if news:
+            news_by_symbol[symbol] = news[:3]
+            for s in summaries:
+                if s.symbol == symbol:
+                    s.top_news_headline = news[0].get("headline", "")[:100]
+                    s.news_sentiment = news[0].get("sentiment")
+                    break
+    return news_by_symbol
+
+
+def run_risk_assessment(
+    judgment_service: JudgmentService,
+    supabase: SupabaseClient,
+    candidates: list[tuple[StockDataLike, ScoredStockLike]],
+    strategy_mode: str,
+    market_regime: str,
+    batch_date: str,
+    current_positions: list,
+    finnhub: FinnhubClient | None = None,
+    yfinance: "YFinanceClient | None" = None,
+    recent_mistakes: list[dict] | None = None,
+    weekly_research: str | None = None,
+    performance_stats: dict | None = None,
+) -> tuple[PortfolioRiskOutput, list[PortfolioCandidateSummary], dict[str, list[dict]]]:
+    """Run risk assessment for portfolio candidates (new ensemble architecture).
+
+    Transforms raw data into summaries, fetches news, calls
+    judgment_service.assess_portfolio_risk(), and returns the result.
+
+    Unlike run_portfolio_judgment(), this does NOT save to DB — the caller
+    saves after ensemble aggregation.
+
+    Args:
+        judgment_service: JudgmentService instance
+        supabase: Supabase client
+        candidates: List of (StockDataLike, ScoredStockLike) tuples
+        strategy_mode: Strategy mode string
+        market_regime: Current regime string
+        batch_date: Date string
+        current_positions: Open positions as PortfolioHolding list
+        finnhub: Optional Finnhub client for news
+        yfinance: Optional yfinance client for news
+        recent_mistakes: Recent buy mistakes for feedback injection
+        weekly_research: Formatted weekly research context
+        performance_stats: Structured performance data
+
+    Returns:
+        Tuple of (PortfolioRiskOutput, summaries, news_by_symbol)
+    """
+    # Build candidate summaries
+    summaries = [_build_candidate_summary(sd, sc) for sd, sc in candidates]
+
+    # Fetch news
+    news_by_symbol = _fetch_news_for_candidates(
+        candidates, summaries, finnhub, yfinance,
+    )
+
+    # Call risk assessment
+    result = judgment_service.assess_portfolio_risk(
+        strategy_mode=strategy_mode,
+        market_regime=market_regime,
+        candidates=summaries,
+        current_positions=current_positions,
+        news_by_symbol=news_by_symbol,
+        recent_mistakes=recent_mistakes,
+        weekly_research=weekly_research,
+        performance_stats=performance_stats,
+    )
+
+    return result, summaries, news_by_symbol
+
+
+def save_risk_assessment_records(
+    supabase: SupabaseClient,
+    ensemble_results: list[EnsembleResult],
+    risk_output: PortfolioRiskOutput,
+    strategy_mode: str,
+    market_regime: str,
+    batch_date: str,
+    model_version: str,
+    is_primary: bool = True,
+) -> None:
+    """Save ensemble risk assessment results as judgment records.
+
+    Maps ensemble results to the existing judgment_records schema:
+    - decision: ensemble final_decision ("buy" / "skip")
+    - confidence: (5 - avg_risk_score) / 4, clamped [0, 1]
+    - score: composite_score from rule-based scoring
+    - reasoning: JSON with risk details + ensemble info
+    - identified_risks: negative_catalysts from risk assessment
+
+    Args:
+        supabase: Supabase client
+        ensemble_results: List of EnsembleResult from aggregation
+        risk_output: PortfolioRiskOutput for catalyst details
+        strategy_mode: Strategy mode string
+        market_regime: Current regime string
+        batch_date: Date string
+        model_version: Model identifier
+        is_primary: Whether this is the primary model's assessment
+    """
+    market_type = "jp" if strategy_mode.startswith("jp_") else "us"
+
+    # Build lookup for risk assessments
+    assessment_map = {a.symbol: a for a in risk_output.assessments}
+
+    for er in ensemble_results:
+        assessment = assessment_map.get(er.symbol)
+        negative_catalysts = assessment.negative_catalysts if assessment else []
+        news_interp = assessment.news_interpretation if assessment else ""
+
+        # Map risk score to confidence: low risk → high confidence
+        confidence = max(0.0, min(1.0, (5 - er.avg_risk_score) / 4))
+
+        reasoning_dict = {
+            "risk_score": er.avg_risk_score,
+            "risk_scores_by_model": er.risk_scores,
+            "consensus_ratio": er.consensus_ratio,
+            "negative_catalysts": negative_catalysts,
+            "news_interpretation": news_interp,
+            "decision_reason": er.decision_reason,
+            "market_level_risks": risk_output.market_level_risks,
+        }
+
+        try:
+            supabase.save_judgment_record(
+                symbol=er.symbol,
+                batch_date=batch_date,
+                strategy_mode=strategy_mode,
+                decision=er.final_decision,
+                confidence=confidence,
+                score=er.composite_score,
+                reasoning=reasoning_dict,
+                key_factors=[],
+                identified_risks=negative_catalysts,
+                market_regime=market_regime,
+                input_summary=f"Ensemble: R{er.avg_risk_score:.1f} C{er.consensus_ratio:.0%}",
+                model_version=model_version,
+                prompt_version="v3_risk_ensemble",
+                raw_llm_response=risk_output.raw_llm_response,
+                judged_at=datetime.now().isoformat(),
+                market_type=market_type,
+                is_primary=is_primary,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save risk assessment record for {er.symbol}: {e}")

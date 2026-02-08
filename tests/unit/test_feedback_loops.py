@@ -77,34 +77,33 @@ class TestBuildPerformanceStats:
         # avg return = (3*4 + (-2)) / 5 = 10/5 = 2.0
         assert result["buy_avg_return"] == 2.0
 
-    def test_calculates_avoid_stats(self):
+    def test_skip_records_excluded_from_buy_stats(self):
+        """Skip/avoid records should not be counted in buy stats."""
         supabase = MagicMock()
         rows = [
             {
                 "actual_return_5d": -3.0,
                 "outcome_aligned": True,
-                "judgment_records": {"symbol": f"A{i}", "strategy_mode": "aggressive", "decision": "avoid", "batch_date": "2025-01-01"},
+                "judgment_records": {"symbol": f"A{i}", "strategy_mode": "aggressive", "decision": "skip", "batch_date": "2025-01-01"},
             }
-            for i in range(3)
-        ] + [
-            {
-                "actual_return_5d": 5.0,
-                "outcome_aligned": False,
-                "judgment_records": {"symbol": "A3", "strategy_mode": "aggressive", "decision": "avoid", "batch_date": "2025-01-01"},
-            }
+            for i in range(4)
         ] + [
             {
                 "actual_return_5d": 2.0,
                 "outcome_aligned": True,
                 "judgment_records": {"symbol": "B0", "strategy_mode": "aggressive", "decision": "buy", "batch_date": "2025-01-01"},
-            }
+            },
+            {
+                "actual_return_5d": 3.0,
+                "outcome_aligned": True,
+                "judgment_records": {"symbol": "B1", "strategy_mode": "aggressive", "decision": "buy", "batch_date": "2025-01-01"},
+            },
         ]
         self._mock_outcomes(supabase, rows)
 
         result = build_performance_stats(supabase, "aggressive", days=30)
-        assert result["avoid_count"] == 4
-        assert result["avoid_correct_count"] == 3
-        assert result["avoid_accuracy"] == 75.0
+        assert result["buy_count"] == 2  # Only buy records counted
+        assert "avoid_count" not in result
 
     def test_filters_by_strategy(self):
         supabase = MagicMock()

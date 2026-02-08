@@ -13,9 +13,12 @@ from src.judgment import (
     PortfolioHolding,
     run_portfolio_judgment,
 )
+from src.judgment.integration import run_risk_assessment, save_risk_assessment_records
+from src.judgment.models import PortfolioRiskOutput, EnsembleResult
 from src.scoring.composite_v2 import get_threshold_passed_symbols
+from src.scoring.market_regime import REGIME_DECISION_PARAMS, MarketRegime
 from src.pipeline.market_config import MarketConfig
-from src.pipeline.review import build_performance_stats
+from src.pipeline.review import build_performance_stats, build_recent_mistakes
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +91,13 @@ def run_llm_judgment_phase(
     supabase=None,
     portfolio=None,
 ) -> tuple[list[str], list[str], JudgmentStats]:
-    """Run portfolio-level LLM judgment on threshold-passed candidates.
+    """Run risk assessment + ensemble aggregation on threshold-passed candidates.
 
-    Uses a single LLM call per strategy to evaluate all candidates
-    simultaneously, enabling comparative evaluation and portfolio-aware
-    decision making.
+    New architecture (v3):
+    1. Primary LLM assesses risk (1-5) for each candidate
+    2. Shadow LLMs also assess risk (optional)
+    3. Ensemble aggregation: avg_risk + consensus → deterministic buy/skip
+    4. Regime parameters control thresholds (max_risk, min_consensus, max_picks)
 
     No fallback: if LLM fails, exception propagates to caller.
     Set config.llm.enable_judgment = false to use rule-based only (intentional).
@@ -144,11 +149,7 @@ def run_llm_judgment_phase(
         v1_positions = _get_portfolio_holdings(portfolio, market_config.v1_strategy_mode)
         v2_positions = _get_portfolio_holdings(portfolio, market_config.v2_strategy_mode)
 
-        max_positions = config.strategy.max_positions if hasattr(config.strategy, "max_positions") else 5
-        v1_slots = max(0, max_positions - len(v1_positions))
-        v2_slots = max(0, max_positions - len(v2_positions))
-
-        # Build structured performance stats (Phase 4)
+        # Build structured performance stats
         v1_perf_stats = None
         v2_perf_stats = None
         if supabase:
@@ -162,98 +163,185 @@ def run_llm_judgment_phase(
         if supabase:
             weekly_research_text = _format_weekly_research(supabase)
 
-        # Run V1 portfolio judgment
+        # Fetch recent mistakes for feedback injection (Step 4)
+        v1_recent_mistakes = None
+        v2_recent_mistakes = None
+        if supabase:
+            v1_recent_mistakes = build_recent_mistakes(supabase, market_config.v1_strategy_mode)
+            v2_recent_mistakes = build_recent_mistakes(supabase, market_config.v2_strategy_mode)
+
+        # Get regime decision params (Step 1)
+        regime_enum = _parse_regime(market_regime_str)
+        regime_params = REGIME_DECISION_PARAMS.get(
+            regime_enum, REGIME_DECISION_PARAMS[MarketRegime.NORMAL]
+        )
+        regime_max_picks = regime_params["max_picks"]
+
+        # Run V1 risk assessment + ensemble
         v1_final_picks = []
-        if v1_candidates and v1_slots > 0:
-            v1_result = run_portfolio_judgment(
+        if v1_candidates:
+            v1_final_picks = _run_strategy_ensemble(
                 judgment_service=judgment_service,
                 supabase=supabase,
                 candidates=v1_candidates,
+                positions=v1_positions,
                 strategy_mode=market_config.v1_strategy_mode,
-                market_regime=market_regime_str,
-                batch_date=today,
-                current_positions=v1_positions,
-                available_slots=v1_slots,
-                available_cash=100000,  # Paper trading nominal
+                market_regime_str=market_regime_str,
+                regime_params=regime_params,
+                today=today,
+                max_picks=min(max_picks, regime_max_picks),
                 finnhub=finnhub,
                 yfinance=yfinance,
-                performance_stats=v1_perf_stats,
+                perf_stats=v1_perf_stats,
                 weekly_research=weekly_research_text,
+                recent_mistakes=v1_recent_mistakes,
+                market_config=market_config,
             )
-            # Safety valve: only accept AI recommendations that passed threshold
-            v1_final_picks = [
-                r.symbol for r in v1_result.recommended_buys
-                if r.symbol in v1_passed_symbols
-            ][:max_picks]
-            logger.info(f"V1 portfolio judgment: {v1_final_picks} (reasoning: {v1_result.portfolio_reasoning[:100]})")
         else:
-            logger.info(f"V1 skipped: {len(v1_candidates)} candidates, {v1_slots} slots")
+            logger.info(f"V1 skipped: no candidates passed threshold")
 
-        # Run V2 portfolio judgment
+        # Run V2 risk assessment + ensemble
         v2_final_picks = []
         v2_max_picks = config.strategy.v2_max_picks if max_picks > 0 else 0
-        if v2_candidates and v2_slots > 0:
-            v2_result = run_portfolio_judgment(
+        if v2_candidates:
+            v2_final_picks = _run_strategy_ensemble(
                 judgment_service=judgment_service,
                 supabase=supabase,
                 candidates=v2_candidates,
+                positions=v2_positions,
                 strategy_mode=market_config.v2_strategy_mode,
-                market_regime=market_regime_str,
-                batch_date=today,
-                current_positions=v2_positions,
-                available_slots=v2_slots,
-                available_cash=100000,
+                market_regime_str=market_regime_str,
+                regime_params=regime_params,
+                today=today,
+                max_picks=min(v2_max_picks, regime_max_picks),
                 finnhub=finnhub,
                 yfinance=yfinance,
-                performance_stats=v2_perf_stats,
+                perf_stats=v2_perf_stats,
                 weekly_research=weekly_research_text,
+                recent_mistakes=v2_recent_mistakes,
+                market_config=market_config,
             )
-            v2_final_picks = [
-                r.symbol for r in v2_result.recommended_buys
-                if r.symbol in v2_passed_symbols
-            ][:v2_max_picks]
-            logger.info(f"V2 portfolio judgment: {v2_final_picks} (reasoning: {v2_result.portfolio_reasoning[:100]})")
         else:
-            logger.info(f"V2 skipped: {len(v2_candidates)} candidates, {v2_slots} slots")
+            logger.info(f"V2 skipped: no candidates passed threshold")
 
-        logger.info(f"V1 picks after LLM judgment: {v1_final_picks}")
-        logger.info(f"V2 picks after LLM judgment: {v2_final_picks}")
+        logger.info(f"V1 picks after ensemble: {v1_final_picks}")
+        logger.info(f"V2 picks after ensemble: {v2_final_picks}")
 
         stats.total_candidates = total_candidates
-        stats.successful_judgments = total_candidates  # Portfolio judgment is all-or-nothing
+        stats.successful_judgments = total_candidates
         judgment_ctx.successful_items = stats.successful_judgments
         judgment_ctx.total_items = stats.total_candidates
         BatchLogger.finish(judgment_ctx)
 
-        # Run shadow model judgments (non-blocking, failures logged only)
-        try:
-            _run_shadow_judgments(
-                v1_candidates=v1_candidates,
-                v2_candidates=v2_candidates,
-                v1_positions=v1_positions,
-                v2_positions=v2_positions,
-                v1_slots=v1_slots,
-                v2_slots=v2_slots,
-                market_regime_str=market_regime_str,
-                market_config=market_config,
-                today=today,
-                finnhub=finnhub,
-                yfinance=yfinance,
-                supabase=supabase,
-                v1_perf_stats=v1_perf_stats,
-                v2_perf_stats=v2_perf_stats,
-                weekly_research_text=weekly_research_text,
-            )
-        except Exception as e:
-            logger.warning(f"Shadow judgments failed (non-critical): {e}")
-
     except Exception as e:
-        # No fallback: propagate error after logging
         logger.error(f"LLM judgment failed: {e}")
         BatchLogger.finish(judgment_ctx, error=str(e))
         raise
 
     return v1_final_picks, v2_final_picks, stats
+
+
+def _parse_regime(regime_str: str) -> MarketRegime:
+    """Parse regime string to MarketRegime enum."""
+    regime_str_lower = regime_str.lower()
+    if "crisis" in regime_str_lower:
+        return MarketRegime.CRISIS
+    elif "adjustment" in regime_str_lower or "correction" in regime_str_lower:
+        return MarketRegime.ADJUSTMENT
+    return MarketRegime.NORMAL
+
+
+def _run_strategy_ensemble(
+    judgment_service: JudgmentService,
+    supabase,
+    candidates: list[tuple],
+    positions: list,
+    strategy_mode: str,
+    market_regime_str: str,
+    regime_params: dict,
+    today: str,
+    max_picks: int,
+    finnhub=None,
+    yfinance=None,
+    perf_stats=None,
+    weekly_research=None,
+    recent_mistakes=None,
+    market_config: MarketConfig | None = None,
+) -> list[str]:
+    """Run risk assessment + shadow ensemble for a single strategy.
+
+    Returns:
+        List of selected symbols (buy decisions)
+    """
+    # 1. Primary risk assessment
+    primary_risk, summaries, news_by_symbol = run_risk_assessment(
+        judgment_service=judgment_service,
+        supabase=supabase,
+        candidates=candidates,
+        strategy_mode=strategy_mode,
+        market_regime=market_regime_str,
+        batch_date=today,
+        current_positions=positions,
+        finnhub=finnhub,
+        yfinance=yfinance,
+        recent_mistakes=recent_mistakes,
+        weekly_research=weekly_research,
+        performance_stats=perf_stats,
+    )
+
+    # 2. Shadow risk assessments (optional)
+    shadow_risks: dict[str, PortfolioRiskOutput] = {}
+    try:
+        shadow_risks = _run_shadow_risk_assessments(
+            candidates=candidates,
+            positions=positions,
+            strategy_mode=strategy_mode,
+            market_regime_str=market_regime_str,
+            today=today,
+            finnhub=finnhub,
+            yfinance=yfinance,
+            supabase=supabase,
+            perf_stats=perf_stats,
+            weekly_research=weekly_research,
+            recent_mistakes=recent_mistakes,
+        )
+    except Exception as e:
+        logger.warning(f"Shadow risk assessments failed (non-critical): {e}")
+
+    # 3. Ensemble aggregation
+    ensemble_results = _aggregate_ensemble(
+        primary_risk=primary_risk,
+        shadow_risks=shadow_risks,
+        candidates=candidates,
+        regime_params=regime_params,
+    )
+
+    # 4. Save records (primary + all models)
+    if supabase:
+        save_risk_assessment_records(
+            supabase=supabase,
+            ensemble_results=ensemble_results,
+            risk_output=primary_risk,
+            strategy_mode=strategy_mode,
+            market_regime=market_regime_str,
+            batch_date=today,
+            model_version=judgment_service.model_name,
+            is_primary=True,
+        )
+
+    # 5. Extract buy picks
+    picks = [
+        er.symbol for er in ensemble_results
+        if er.final_decision == "buy"
+    ][:max_picks]
+
+    logger.info(
+        f"[{strategy_mode}] Ensemble: {len(picks)} buys from "
+        f"{len(ensemble_results)} candidates "
+        f"(regime={market_regime_str}, models={1 + len(shadow_risks)})"
+    )
+
+    return picks
 
 
 def _get_portfolio_holdings(portfolio, strategy_mode: str) -> list[PortfolioHolding]:
@@ -372,47 +460,143 @@ def _format_weekly_research(supabase) -> str | None:
         return None
 
 
-def _run_shadow_judgments(
-    v1_candidates: list,
-    v2_candidates: list,
-    v1_positions: list,
-    v2_positions: list,
-    v1_slots: int,
-    v2_slots: int,
+def _aggregate_ensemble(
+    primary_risk: PortfolioRiskOutput,
+    shadow_risks: dict[str, PortfolioRiskOutput],
+    candidates: list[tuple],
+    regime_params: dict,
+) -> list[EnsembleResult]:
+    """Aggregate risk scores from primary + shadow models into ensemble decisions.
+
+    Decision logic (deterministic):
+    1. avg_risk = mean(all models' risk_scores for this symbol)
+    2. consensus = (models with risk_score <= 3) / total_models
+    3. buy if: avg_risk <= max_risk AND consensus >= min_consensus AND score >= min_score
+    4. Sort by composite_score, limit to max_picks
+
+    Args:
+        primary_risk: Primary model's risk output
+        shadow_risks: Dict of model_id -> PortfolioRiskOutput
+        candidates: Original (stock_data, score) tuples
+        regime_params: REGIME_DECISION_PARAMS for current regime
+
+    Returns:
+        List of EnsembleResult sorted by composite_score (descending)
+    """
+    max_risk = regime_params["max_risk"]
+    min_consensus = regime_params["min_consensus"]
+    min_score = regime_params["min_score"]
+    max_picks = regime_params["max_picks"]
+
+    # Build per-symbol risk score map: {symbol: {model_id: risk_score}}
+    all_risk_scores: dict[str, dict[str, int]] = {}
+
+    # Primary model
+    primary_model_id = "primary"
+    for assessment in primary_risk.assessments:
+        all_risk_scores.setdefault(assessment.symbol, {})[primary_model_id] = assessment.risk_score
+
+    # Shadow models
+    for model_id, risk_output in shadow_risks.items():
+        for assessment in risk_output.assessments:
+            all_risk_scores.setdefault(assessment.symbol, {})[model_id] = assessment.risk_score
+
+    # Build score lookup
+    score_map = {}
+    for stock_data, score in candidates:
+        sym = stock_data.symbol if hasattr(stock_data, "symbol") else stock_data.get("symbol", "")
+        score_map[sym] = score.composite_score if hasattr(score, "composite_score") else 0
+
+    results = []
+    for symbol, risk_scores in all_risk_scores.items():
+        composite_score = score_map.get(symbol, 0)
+        n_models = len(risk_scores)
+        avg_risk = sum(risk_scores.values()) / n_models
+        consensus = sum(1 for r in risk_scores.values() if r <= 3) / n_models
+
+        # Deterministic decision
+        reasons = []
+        if composite_score < min_score:
+            reasons.append(f"score {composite_score} < {min_score}")
+        if avg_risk > max_risk:
+            reasons.append(f"risk {avg_risk:.1f} > {max_risk}")
+        if consensus < min_consensus:
+            reasons.append(f"consensus {consensus:.0%} < {min_consensus:.0%}")
+
+        if reasons:
+            decision = "skip"
+            reason = "Skip: " + ", ".join(reasons)
+        else:
+            decision = "buy"
+            reason = f"Buy: score={composite_score}, risk={avg_risk:.1f}, consensus={consensus:.0%}"
+
+        results.append(EnsembleResult(
+            symbol=symbol,
+            composite_score=composite_score,
+            avg_risk_score=avg_risk,
+            risk_scores=risk_scores,
+            consensus_ratio=consensus,
+            final_decision=decision,
+            decision_reason=reason,
+        ))
+
+    # Sort by composite_score descending, take top max_picks buys
+    results.sort(key=lambda r: r.composite_score, reverse=True)
+
+    # Apply max_picks: only keep top N buys, rest become skip
+    buy_count = 0
+    for r in results:
+        if r.final_decision == "buy":
+            buy_count += 1
+            if buy_count > max_picks:
+                r.final_decision = "skip"
+                r.decision_reason += f" (exceeded max_picks={max_picks})"
+
+    return results
+
+
+def _run_shadow_risk_assessments(
+    candidates: list[tuple],
+    positions: list,
+    strategy_mode: str,
     market_regime_str: str,
-    market_config: MarketConfig,
     today: str,
     finnhub=None,
     yfinance=None,
     supabase=None,
-    v1_perf_stats=None,
-    v2_perf_stats=None,
-    weekly_research_text=None,
-) -> None:
-    """Run shadow model judgments sequentially for comparison.
+    perf_stats=None,
+    weekly_research=None,
+    recent_mistakes=None,
+) -> dict[str, PortfolioRiskOutput]:
+    """Run shadow model risk assessments and return results for ensemble.
 
-    Shadow results are saved to judgment_records with is_primary=FALSE.
-    Failures do NOT affect the primary pipeline.
+    Unlike the old _run_shadow_judgments() which returned None and saved directly,
+    this returns results so they can participate in ensemble aggregation.
+
+    Returns:
+        Dict of model_id -> PortfolioRiskOutput
     """
     if not config.llm.enable_shadow_judgment:
-        return
+        return {}
 
     shadow_models = config.llm.shadow_models
     if not shadow_models:
         logger.info("Shadow judgment enabled but no shadow models configured")
-        return
+        return {}
 
     if not config.llm.openrouter_api_key:
         logger.warning("Shadow judgment enabled but OPENROUTER_API_KEY not set")
-        return
+        return {}
 
     from src.llm.openai_client import OpenAIClient
 
-    logger.info(f"Starting shadow judgments with {len(shadow_models)} models")
+    logger.info(f"Starting shadow risk assessments with {len(shadow_models)} models")
+
+    results: dict[str, PortfolioRiskOutput] = {}
 
     for model_id in shadow_models:
         try:
-            logger.info(f"Shadow judgment: {model_id}")
+            logger.info(f"Shadow risk assessment: {model_id}")
 
             shadow_client = OpenAIClient(
                 base_url=config.llm.openrouter_base_url,
@@ -424,60 +608,30 @@ def _run_shadow_judgments(
                 model_name=model_id,
             )
 
-            # V1 shadow judgment
-            if v1_candidates and v1_slots > 0:
-                try:
-                    v1_result = run_portfolio_judgment(
-                        judgment_service=shadow_service,
-                        supabase=supabase,
-                        candidates=v1_candidates,
-                        strategy_mode=market_config.v1_strategy_mode,
-                        market_regime=market_regime_str,
-                        batch_date=today,
-                        current_positions=v1_positions,
-                        available_slots=v1_slots,
-                        available_cash=100000,
-                        finnhub=finnhub,
-                        yfinance=yfinance,
-                        performance_stats=v1_perf_stats,
-                        weekly_research=weekly_research_text,
-                        is_primary=False,
-                    )
-                    logger.info(
-                        f"Shadow {model_id} [{market_config.v1_strategy_mode}]: "
-                        f"{len(v1_result.recommended_buys)} buys"
-                    )
-                except Exception as e:
-                    logger.warning(f"Shadow {model_id} V1 failed: {e}")
+            risk_output, _, _ = run_risk_assessment(
+                judgment_service=shadow_service,
+                supabase=supabase,
+                candidates=candidates,
+                strategy_mode=strategy_mode,
+                market_regime=market_regime_str,
+                batch_date=today,
+                current_positions=positions,
+                finnhub=finnhub,
+                yfinance=yfinance,
+                recent_mistakes=recent_mistakes,
+                weekly_research=weekly_research,
+                performance_stats=perf_stats,
+            )
 
-            # V2 shadow judgment
-            if v2_candidates and v2_slots > 0:
-                try:
-                    v2_result = run_portfolio_judgment(
-                        judgment_service=shadow_service,
-                        supabase=supabase,
-                        candidates=v2_candidates,
-                        strategy_mode=market_config.v2_strategy_mode,
-                        market_regime=market_regime_str,
-                        batch_date=today,
-                        current_positions=v2_positions,
-                        available_slots=v2_slots,
-                        available_cash=100000,
-                        finnhub=finnhub,
-                        yfinance=yfinance,
-                        performance_stats=v2_perf_stats,
-                        weekly_research=weekly_research_text,
-                        is_primary=False,
-                    )
-                    logger.info(
-                        f"Shadow {model_id} [{market_config.v2_strategy_mode}]: "
-                        f"{len(v2_result.recommended_buys)} buys"
-                    )
-                except Exception as e:
-                    logger.warning(f"Shadow {model_id} V2 failed: {e}")
+            results[model_id] = risk_output
+            logger.info(
+                f"Shadow {model_id}: "
+                + ", ".join(f"{a.symbol}=R{a.risk_score}" for a in risk_output.assessments)
+            )
 
         except Exception as e:
-            logger.warning(f"Failed to initialize shadow model {model_id}: {e}")
+            logger.warning(f"Shadow {model_id} failed: {e}")
             continue
 
-    logger.info("Shadow judgments complete")
+    logger.info(f"Shadow risk assessments complete: {len(results)}/{len(shadow_models)} succeeded")
+    return results

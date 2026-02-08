@@ -30,12 +30,12 @@ class StrategyConfig:
     """Strategy-related configuration."""
     mode: StrategyMode = "both"  # Run both strategies by default
 
-    # V1 Conservative weights
+    # V1 Conservative weights (rebalanced: reduce price-direction dominance)
     v1_weights: dict = field(default_factory=lambda: {
-        "trend": 0.35,
-        "momentum": 0.35,
-        "value": 0.20,
-        "sentiment": 0.10,
+        "trend": 0.20,
+        "momentum": 0.20,
+        "value": 0.30,
+        "sentiment": 0.30,
     })
 
     # V2 Aggressive weights

@@ -785,13 +785,6 @@ def build_portfolio_judgment_prompt(
                 f"{performance_stats.get('buy_win_count', 0)}件が利益"
                 f"（勝率{win_rate:.1f}%、平均リターン{avg_ret:+.2f}%）"
             )
-        if "avoid_count" in performance_stats:
-            accuracy = performance_stats.get("avoid_accuracy", 0)
-            perf_lines.append(
-                f"- Avoid判断: {performance_stats['avoid_count']}件中"
-                f"{performance_stats.get('avoid_correct_count', 0)}件が正解"
-                f"（精度{accuracy:.1f}%）"
-            )
         if len(perf_lines) > 1:
             perf_section = "\n".join(perf_lines)
 
@@ -936,5 +929,182 @@ AI判断で保持を延長すべきかを評価してください。
 ```
 
 JSONオブジェクトのみを返してください。"""
+
+    return prompt
+
+
+# === Risk Assessment (Ensemble Architecture) ===
+
+RISK_ASSESSMENT_SYSTEM_PROMPT = """あなたは投資リスクアナリストです。
+ルールベーススコアリングシステムが高スコアをつけた銘柄候補について、
+ルールが見逃している可能性のあるリスクを評価してください。
+
+あなたの仕事は「買うか決める」ことではありません。
+あなたの仕事は「ルールが見落としたリスク」を見つけることです。
+
+リスクスコア基準:
+1: リスク極小 — ニュースも好材料、カタリスト明確、ネガティブ要因なし
+2: リスク低 — 特段の懸念なし、通常の市場リスクのみ
+3: リスク中 — 一部懸念はあるが致命的でない（不確実な場合のデフォルト）
+4: リスク高 — 明確なネガティブカタリストあり（訴訟、ガイダンス下方修正等）
+5: リスク極高 — 複数の深刻な懸念、ルール判断を覆すべき
+
+重要:
+- テクニカル指標（RSI、SMA等）はルールが既に考慮済み。再評価不要
+- ニュース、カタリスト、定性的リスクの評価に集中せよ
+- 情報不足の場合はリスク3（中立）を付与
+- セクター集中リスクも考慮すること
+
+出力要件:
+- 指定されたJSON形式で回答
+- すべてのテキストは日本語で記述"""
+
+
+def build_risk_assessment_prompt(
+    strategy_mode: str,
+    market_regime: str,
+    candidates: list,
+    current_positions: list,
+    news_by_symbol: dict[str, list[dict]] | None = None,
+    recent_mistakes: list[dict] | None = None,
+    weekly_research: str | None = None,
+    performance_stats: dict | None = None,
+) -> str:
+    """Build prompt for risk assessment (ensemble architecture).
+
+    Unlike the old portfolio judgment prompt, this does NOT ask LLM to make
+    buy/skip decisions. It asks LLM to rate risk only.
+
+    Args:
+        strategy_mode: Strategy mode string
+        market_regime: Current market regime
+        candidates: List of PortfolioCandidateSummary
+        current_positions: List of PortfolioHolding
+        news_by_symbol: Dict mapping symbol -> list of news dicts
+        recent_mistakes: Recent buy mistakes for feedback
+        weekly_research: Weekly research text
+        performance_stats: Buy performance stats
+
+    Returns:
+        Complete prompt string for LLM
+    """
+    # Candidates table (compact — no technical details)
+    candidate_rows = []
+    for c in candidates:
+        rsi_str = f"{c.rsi:.0f}" if c.rsi is not None else "-"
+        sector_str = c.sector or "-"
+        candidate_rows.append(
+            f"| {c.symbol} | {c.composite_score} | {rsi_str} | "
+            f"{c.key_signal} | {sector_str} |"
+        )
+
+    candidates_section = f"""## 候補一覧（ルールベース高スコア銘柄: {len(candidates)}銘柄）
+| Symbol | Score | RSI | Signal | Sector |
+|--------|-------|-----|--------|--------|
+{chr(10).join(candidate_rows)}"""
+
+    # Holdings for sector concentration awareness
+    holdings_section = ""
+    if current_positions:
+        rows = []
+        for pos in current_positions:
+            rows.append(f"| {pos.symbol} | {pos.pnl_pct:+.1f}% | {pos.hold_days}日 |")
+        holdings_section = f"""## 現在の保有ポジション（{len(current_positions)}銘柄）
+| Symbol | PnL% | 保有日数 |
+|--------|------|----------|
+{chr(10).join(rows)}"""
+    else:
+        holdings_section = "## 現在の保有ポジション\nなし"
+
+    # News section — this is the primary information for LLM
+    news_section = ""
+    if news_by_symbol:
+        news_lines = ["## 各候補のニュース"]
+        for symbol, news_list in list(news_by_symbol.items())[:15]:
+            if not news_list:
+                news_lines.append(f"- **{symbol}**: ニュースなし")
+                continue
+            for news in news_list[:3]:
+                headline = news.get("headline", "")[:120]
+                sentiment = news.get("sentiment", "")
+                time_cat = news.get("time_category", "")
+                sent_str = f" [{sentiment}]" if sentiment else ""
+                time_str = f" ({time_cat})" if time_cat else ""
+                news_lines.append(f"- **{symbol}**: {headline}{sent_str}{time_str}")
+        if len(news_lines) > 1:
+            news_section = "\n".join(news_lines)
+
+    # Recent mistakes — immediate learning feedback
+    mistakes_section = ""
+    if recent_mistakes:
+        mistake_lines = ["## 直近の判断ミス（翌日フィードバック）"]
+        for m in recent_mistakes:
+            mistake_lines.append(
+                f"- {m['batch_date']}: **{m['symbol']}** を買い推奨"
+                f"（確信度{m['confidence']:.0%}）→ 翌日 {m['return_1d']:+.1f}%"
+            )
+            if m.get("reasoning_summary"):
+                mistake_lines.append(f"  理由: {m['reasoning_summary']}")
+        mistake_lines.append("⚠️ 同様のパターンに注意してリスク評価を行うこと")
+        mistakes_section = "\n".join(mistake_lines)
+
+    # Performance stats (buy only)
+    perf_section = ""
+    if performance_stats and "buy_count" in performance_stats:
+        win_rate = performance_stats.get("buy_win_rate", 0)
+        avg_ret = performance_stats.get("buy_avg_return", 0)
+        perf_section = (
+            f"## 過去の買い判断実績\n"
+            f"- {performance_stats['buy_count']}件中"
+            f"{performance_stats.get('buy_win_count', 0)}件が利益"
+            f"（勝率{win_rate:.1f}%、平均リターン{avg_ret:+.2f}%）"
+        )
+
+    prompt = f"""# リスク評価リクエスト
+
+## 市場環境
+- マーケットレジーム: {market_regime}
+- 戦略: {strategy_mode}
+
+{candidates_section}
+
+{holdings_section}
+
+{news_section}
+
+{mistakes_section}
+
+{perf_section}
+
+{weekly_research if weekly_research else ""}
+
+## タスク
+上記候補の各銘柄について、ルールベーススコアリングが見逃している可能性のあるリスクを評価してください。
+
+評価のポイント:
+1. ニュースに基づくネガティブカタリストの有無
+2. セクター集中リスク（現在の保有ポジションとの重複）
+3. 直近の判断ミスと同様のパターンがないか
+4. ルールでは捕捉できない定性的リスク
+
+## 出力フォーマット (JSON) - 日本語で記述
+
+```json
+{{{{
+  "risk_assessments": [
+    {{{{
+      "symbol": "AAPL",
+      "risk_score": 2,
+      "negative_catalysts": [],
+      "news_interpretation": "好材料 — 決算好調、アナリスト上方修正",
+      "portfolio_concern": null
+    }}}}
+  ],
+  "market_level_risks": "現時点でシステミックリスクなし",
+  "sector_concentration_warning": null
+}}}}
+```
+
+JSONオブジェクトのみを返してください。追加テキストは不要です。"""
 
     return prompt

@@ -132,31 +132,33 @@ class TestPopulateJudgmentOutcomes:
         assert call_kwargs["outcome_aligned"] is True
         assert call_kwargs["actual_return_1d"] == -5.0
 
-    def test_hold_small_move_aligned(self):
+    def test_skip_positive_return_not_aligned(self):
+        """Skip/hold with positive return = we missed a winner → not aligned."""
         from src.pipeline.review import populate_judgment_outcomes
         supabase = MagicMock()
         supabase.get_judgment_records.return_value = [
-            {"id": "j3", "symbol": "IBM", "strategy_mode": "conservative", "decision": "hold"}
+            {"id": "j3", "symbol": "IBM", "strategy_mode": "conservative", "decision": "skip"}
         ]
         results = self._make_results(
             not_picked=[{"symbol": "IBM", "strategy": "conservative", "return_pct": 1.5}]
         )
         populate_judgment_outcomes(supabase, results)
         call_kwargs = supabase.save_judgment_outcome.call_args[1]
-        assert call_kwargs["outcome_aligned"] is True  # |1.5| < 3.0
+        assert call_kwargs["outcome_aligned"] is False  # return > 0 → missed winner
 
-    def test_hold_large_move_not_aligned(self):
+    def test_skip_negative_return_aligned(self):
+        """Skip/hold with negative return = correctly avoided loser → aligned."""
         from src.pipeline.review import populate_judgment_outcomes
         supabase = MagicMock()
         supabase.get_judgment_records.return_value = [
-            {"id": "j4", "symbol": "GME", "strategy_mode": "aggressive", "decision": "hold"}
+            {"id": "j4", "symbol": "GME", "strategy_mode": "aggressive", "decision": "skip"}
         ]
         results = self._make_results(
-            not_picked=[{"symbol": "GME", "strategy": "aggressive", "return_pct": 10.0}]
+            not_picked=[{"symbol": "GME", "strategy": "aggressive", "return_pct": -5.0}]
         )
         populate_judgment_outcomes(supabase, results)
         call_kwargs = supabase.save_judgment_outcome.call_args[1]
-        assert call_kwargs["outcome_aligned"] is False  # |10.0| >= 3.0
+        assert call_kwargs["outcome_aligned"] is True  # return < 0 → correct skip
 
     def test_no_matching_judgment_skipped(self):
         from src.pipeline.review import populate_judgment_outcomes

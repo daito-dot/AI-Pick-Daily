@@ -73,10 +73,8 @@ def populate_judgment_outcomes(
         # Determine outcome alignment
         if decision == "buy":
             outcome_aligned = return_pct >= 0
-        elif decision == "avoid":
+        else:  # "skip", legacy "avoid", legacy "hold"
             outcome_aligned = return_pct < 0
-        else:  # hold
-            outcome_aligned = abs(return_pct) < 3.0
 
         kwargs: dict = {
             "judgment_id": judgment_id,
@@ -248,32 +246,28 @@ def adjust_thresholds_for_strategies(
 def build_performance_stats(supabase, strategy_mode: str, days: int = 30) -> dict:
     """Aggregate judgment performance into structured data for prompt injection.
 
-    Replaces AI lessons (natural language reflections) with concrete numbers
-    derived from judgment_outcomes + judgment_records via SQL.
+    Focuses on buy accuracy only (avoid/hold tracking removed — LLM now does
+    risk assessment, not buy/avoid decisions).
 
-    Returns dict with buy/avoid accuracy, sector performance, missed patterns.
+    Returns dict with buy win rate and average return.
     Returns empty dict if insufficient data.
     """
     try:
-        # Fetch judgment outcomes with their records for the last N days
         cutoff = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
         rows = supabase._client.table("judgment_outcomes").select(
             "actual_return_5d, outcome_aligned, "
             "judgment_records!inner(symbol, strategy_mode, decision, batch_date)"
         ).gte("outcome_date", cutoff).execute().data or []
 
-        # Filter by strategy
         rows = [r for r in rows if r.get("judgment_records", {}).get("strategy_mode") == strategy_mode]
 
         if len(rows) < 5:
             return {}
 
         buys = [r for r in rows if r["judgment_records"]["decision"] == "buy"]
-        avoids = [r for r in rows if r["judgment_records"]["decision"] == "avoid"]
 
         stats: dict = {}
 
-        # Buy accuracy
         if buys:
             buy_returns = [r["actual_return_5d"] for r in buys if r.get("actual_return_5d") is not None]
             buy_wins = [r for r in buy_returns if r >= 0]
@@ -282,20 +276,68 @@ def build_performance_stats(supabase, strategy_mode: str, days: int = 30) -> dic
             stats["buy_win_rate"] = round(len(buy_wins) / len(buy_returns) * 100, 1) if buy_returns else 0
             stats["buy_avg_return"] = round(sum(buy_returns) / len(buy_returns), 2) if buy_returns else 0
 
-        # Avoid accuracy
-        if avoids:
-            avoid_returns = [r["actual_return_5d"] for r in avoids if r.get("actual_return_5d") is not None]
-            avoid_correct = [r for r in avoid_returns if r < 0]
-            stats["avoid_count"] = len(avoid_returns)
-            stats["avoid_correct_count"] = len(avoid_correct)
-            stats["avoid_accuracy"] = round(len(avoid_correct) / len(avoid_returns) * 100, 1) if avoid_returns else 0
-
-        logger.info(f"Built performance stats for {strategy_mode}: {len(rows)} outcomes, {len(buys)} buys, {len(avoids)} avoids")
+        logger.info(f"Built performance stats for {strategy_mode}: {len(rows)} outcomes, {len(buys)} buys")
         return stats
 
     except Exception as e:
         logger.warning(f"Failed to build performance stats for {strategy_mode}: {e}")
         return {}
+
+
+def build_recent_mistakes(supabase, strategy_mode: str, days: int = 3) -> list[dict]:
+    """Fetch recent buy recommendations that dropped next day.
+
+    Returns the worst recent mistakes for injection into the risk assessment
+    prompt, enabling immediate learning from failures.
+
+    Args:
+        supabase: Supabase client
+        strategy_mode: Strategy to filter by
+        days: How many days back to look
+
+    Returns:
+        List of mistake dicts with symbol, batch_date, return_1d, confidence
+    """
+    try:
+        cutoff = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+        rows = supabase._client.table("judgment_outcomes").select(
+            "actual_return_1d, "
+            "judgment_records!inner(symbol, strategy_mode, decision, batch_date, confidence, reasoning)"
+        ).gte("outcome_date", cutoff).not_.is_("actual_return_1d", "null").execute().data or []
+
+        rows = [
+            r for r in rows
+            if r.get("judgment_records", {}).get("strategy_mode") == strategy_mode
+            and r["judgment_records"]["decision"] == "buy"
+            and r.get("actual_return_1d") is not None
+            and r["actual_return_1d"] < -2.0
+        ]
+
+        rows.sort(key=lambda r: r["actual_return_1d"])
+
+        mistakes = []
+        for r in rows[:3]:
+            jr = r["judgment_records"]
+            reasoning = jr.get("reasoning") or {}
+            summary = ""
+            if isinstance(reasoning, dict):
+                steps = reasoning.get("steps", [])
+                summary = steps[0][:100] if steps else ""
+            mistakes.append({
+                "symbol": jr["symbol"],
+                "batch_date": jr["batch_date"],
+                "return_1d": round(r["actual_return_1d"], 2),
+                "confidence": jr.get("confidence", 0),
+                "reasoning_summary": summary,
+            })
+
+        if mistakes:
+            logger.info(f"Found {len(mistakes)} recent mistakes for {strategy_mode}")
+        return mistakes
+
+    except Exception as e:
+        logger.warning(f"Failed to build recent mistakes for {strategy_mode}: {e}")
+        return []
 
 
 # === Factor Weight Constants ===

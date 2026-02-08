@@ -11,7 +11,7 @@ import json
 
 
 # Type aliases
-JudgmentDecision = Literal["buy", "hold", "avoid"]
+JudgmentDecision = Literal["buy", "skip"]
 AllocationHint = Literal["high", "normal", "low"]
 FactorType = Literal["fundamental", "technical", "sentiment", "macro", "catalyst"]
 FactorImpact = Literal["positive", "negative", "neutral"]
@@ -289,3 +289,37 @@ class ExitJudgmentOutput:
     risks_of_holding: list[str]
     risks_of_closing: list[str]
     raw_llm_response: str | None = None
+
+
+# === Risk Assessment Models (Ensemble Architecture) ===
+
+
+@dataclass
+class RiskAssessment:
+    """LLM risk assessment for a single stock candidate."""
+    symbol: str
+    risk_score: int  # 1 (very low risk) - 5 (very high risk)
+    negative_catalysts: list[str]
+    news_interpretation: str
+    portfolio_concern: str | None = None
+
+
+@dataclass
+class PortfolioRiskOutput:
+    """Complete risk assessment output from LLM."""
+    assessments: list[RiskAssessment]
+    market_level_risks: str
+    sector_concentration_warning: str | None = None
+    raw_llm_response: str | None = None
+
+
+@dataclass
+class EnsembleResult:
+    """Aggregated ensemble result for a single stock after multi-model voting."""
+    symbol: str
+    composite_score: int           # Rule-based score
+    avg_risk_score: float          # Mean risk across all models
+    risk_scores: dict[str, int]    # model_id -> risk_score
+    consensus_ratio: float         # Fraction of models with risk <= 3
+    final_decision: str            # "buy" or "skip"
+    decision_reason: str           # Human-readable decision explanation

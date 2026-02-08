@@ -15,11 +15,13 @@ from .models import (
     JudgmentOutput, ReasoningTrace, KeyFactor,
     PortfolioJudgmentOutput, StockAllocation,
     ExitJudgmentOutput,
+    RiskAssessment, PortfolioRiskOutput,
 )
 from .prompts import (
     JUDGMENT_SYSTEM_PROMPT, build_judgment_prompt, PROMPT_VERSION,
     PORTFOLIO_SYSTEM_PROMPT, build_portfolio_judgment_prompt, PORTFOLIO_PROMPT_VERSION,
     EXIT_SYSTEM_PROMPT, build_exit_judgment_prompt,
+    RISK_ASSESSMENT_SYSTEM_PROMPT, build_risk_assessment_prompt,
 )
 
 
@@ -263,7 +265,7 @@ class JudgmentService:
             decision = "buy"
             confidence = 0.4  # Lower confidence due to fallback
         else:
-            decision = "avoid"
+            decision = "skip"
             confidence = 0.3
 
         return JudgmentOutput(
@@ -496,6 +498,156 @@ class JudgmentService:
             ))
 
         return results
+
+    def assess_portfolio_risk(
+        self,
+        strategy_mode: str,
+        market_regime: str,
+        candidates: list,
+        current_positions: list,
+        news_by_symbol: dict[str, list[dict]] | None = None,
+        recent_mistakes: list[dict] | None = None,
+        weekly_research: str | None = None,
+        performance_stats: dict | None = None,
+    ) -> PortfolioRiskOutput:
+        """Assess risk for portfolio candidates (new ensemble architecture).
+
+        Unlike judge_portfolio() which asks LLM to make buy/skip decisions,
+        this method asks LLM to rate risk only (1-5 scale). The final buy/skip
+        decision is made by a deterministic function using ensemble results.
+
+        Args:
+            strategy_mode: Strategy mode string
+            market_regime: Current market regime
+            candidates: List of PortfolioCandidateSummary
+            current_positions: List of PortfolioHolding
+            news_by_symbol: Dict mapping symbol -> list of news dicts
+            recent_mistakes: Recent buy mistakes for feedback injection
+            weekly_research: Weekly research summary text
+            performance_stats: Structured performance data
+
+        Returns:
+            PortfolioRiskOutput with risk assessments for all candidates
+        """
+        logger.info(
+            f"Assessing portfolio risk for {len(candidates)} candidates "
+            f"({strategy_mode}, regime={market_regime})"
+        )
+
+        prompt = build_risk_assessment_prompt(
+            strategy_mode=strategy_mode,
+            market_regime=market_regime,
+            candidates=candidates,
+            current_positions=current_positions,
+            news_by_symbol=news_by_symbol,
+            recent_mistakes=recent_mistakes,
+            weekly_research=weekly_research,
+            performance_stats=performance_stats,
+        )
+
+        full_prompt = f"{RISK_ASSESSMENT_SYSTEM_PROMPT}\n\n{prompt}"
+
+        thinking_level = config.llm.judgment_thinking_level
+
+        try:
+            response = self.llm_client.generate_with_thinking(
+                prompt=full_prompt,
+                model=self.model_name,
+                thinking_level=thinking_level,
+            )
+
+            logger.debug(f"Risk assessment response: {len(response.content)} chars")
+
+            result = self._parse_risk_assessment_response(response.content, candidates)
+            result.raw_llm_response = response.content
+
+            logger.info(
+                f"Risk assessment complete: "
+                + ", ".join(
+                    f"{a.symbol}=R{a.risk_score}" for a in result.assessments
+                )
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Risk assessment failed: {e}, using neutral defaults")
+            return self._create_fallback_risk_output(candidates, str(e))
+
+    def _parse_risk_assessment_response(
+        self,
+        response: str,
+        candidates: list,
+    ) -> PortfolioRiskOutput:
+        """Parse LLM risk assessment response into PortfolioRiskOutput."""
+        cleaned = response.strip()
+        if "```json" in cleaned:
+            start = cleaned.find("```json") + 7
+            end = cleaned.find("```", start)
+            cleaned = cleaned[start:end].strip()
+        elif "```" in cleaned:
+            start = cleaned.find("```") + 3
+            end = cleaned.find("```", start)
+            cleaned = cleaned[start:end].strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in risk assessment response: {e}")
+
+        assessments = []
+        candidate_symbols = {getattr(c, "symbol", c.get("symbol", "")) if isinstance(c, dict) else c.symbol for c in candidates}
+
+        for item in data.get("risk_assessments", []):
+            symbol = item.get("symbol", "")
+            risk_score = int(item.get("risk_score", 3))
+            risk_score = max(1, min(5, risk_score))  # Clamp 1-5
+
+            assessments.append(RiskAssessment(
+                symbol=symbol,
+                risk_score=risk_score,
+                negative_catalysts=item.get("negative_catalysts", []),
+                news_interpretation=item.get("news_interpretation", ""),
+                portfolio_concern=item.get("portfolio_concern"),
+            ))
+
+        # Fill missing candidates with neutral risk
+        assessed_symbols = {a.symbol for a in assessments}
+        for sym in candidate_symbols - assessed_symbols:
+            logger.warning(f"LLM did not assess {sym}, defaulting to risk_score=3")
+            assessments.append(RiskAssessment(
+                symbol=sym,
+                risk_score=3,
+                negative_catalysts=[],
+                news_interpretation="Not assessed by LLM",
+            ))
+
+        return PortfolioRiskOutput(
+            assessments=assessments,
+            market_level_risks=data.get("market_level_risks", ""),
+            sector_concentration_warning=data.get("sector_concentration_warning"),
+        )
+
+    def _create_fallback_risk_output(
+        self,
+        candidates: list,
+        error_message: str,
+    ) -> PortfolioRiskOutput:
+        """Create neutral risk output when LLM fails."""
+        assessments = []
+        for c in candidates:
+            symbol = c.symbol if hasattr(c, "symbol") else c.get("symbol", "?")
+            assessments.append(RiskAssessment(
+                symbol=symbol,
+                risk_score=3,
+                negative_catalysts=[],
+                news_interpretation=f"Fallback: {error_message}",
+            ))
+
+        return PortfolioRiskOutput(
+            assessments=assessments,
+            market_level_risks=f"Risk assessment unavailable: {error_message}",
+        )
 
     def _create_input_summary(self, stock_data: dict) -> str:
         """Create a brief summary of input data for record-keeping."""

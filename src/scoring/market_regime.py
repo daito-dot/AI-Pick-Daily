@@ -76,11 +76,33 @@ REGIME_WEIGHT_ADJUSTMENTS = {
     ),
 }
 
-# Max picks by regime
+# Max picks by regime (legacy — use REGIME_DECISION_PARAMS instead)
 REGIME_MAX_PICKS = {
     MarketRegime.NORMAL: 5,
     MarketRegime.ADJUSTMENT: 3,
     MarketRegime.CRISIS: 0,  # No recommendations in crisis
+}
+
+# Decision parameters by regime — controls the deterministic decision function
+REGIME_DECISION_PARAMS = {
+    MarketRegime.NORMAL: {
+        "max_picks": 5,
+        "min_score": 55,        # Rule-based score minimum
+        "max_risk": 3.5,        # Max acceptable LLM risk score (1-5)
+        "min_consensus": 0.5,   # Minimum ensemble agreement ratio
+    },
+    MarketRegime.ADJUSTMENT: {
+        "max_picks": 3,
+        "min_score": 65,
+        "max_risk": 2.5,
+        "min_consensus": 0.6,
+    },
+    MarketRegime.CRISIS: {
+        "max_picks": 1,
+        "min_score": 75,
+        "max_risk": 1.5,
+        "min_consensus": 0.8,
+    },
 }
 
 
