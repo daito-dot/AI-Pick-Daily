@@ -22,7 +22,7 @@ env:
 jobs:
   scoring-jp:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -77,6 +77,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ENABLE_JUDGMENT: ${{ vars.ENABLE_JUDGMENT || 'true' }}
           JUDGMENT_THINKING_LEVEL: ${{ vars.JUDGMENT_THINKING_LEVEL || 'low' }}
+          ENABLE_SHADOW_JUDGMENT: ${{ vars.ENABLE_SHADOW_JUDGMENT || 'false' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1' }}
+          SHADOW_MODELS: ${{ vars.SHADOW_MODELS || '' }}
           DEBUG: ${{ github.event.inputs.debug || 'false' }}
         run: |
           python scripts/daily_scoring_jp.py
