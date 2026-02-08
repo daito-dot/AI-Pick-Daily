@@ -709,6 +709,7 @@ def build_portfolio_judgment_prompt(
     available_cash: float,
     news_by_symbol: dict[str, list[dict]] | None = None,
     performance_stats: dict | None = None,
+    weekly_research: str | None = None,
 ) -> str:
     """Build prompt for portfolio-level judgment.
 
@@ -809,6 +810,8 @@ def build_portfolio_judgment_prompt(
 {news_section}
 
 {perf_section}
+
+{weekly_research if weekly_research else ""}
 
 ## 戦略ガイダンス
 {strategy_guidance}

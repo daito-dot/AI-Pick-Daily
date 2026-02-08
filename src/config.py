@@ -51,7 +51,7 @@ class StrategyConfig:
 @dataclass
 class LLMConfig:
     """LLM-related configuration."""
-    provider: Literal["gemini", "claude"] = "gemini"
+    provider: Literal["gemini", "claude", "openai"] = "gemini"
     scoring_model: str = "gemini-2.5-flash-lite"
     analysis_model: str = "gemini-3-flash-preview"  # For judgment (Layer 2)
     reflection_model: str = "gemini-3-pro-preview"  # For reflection (Layer 3)
@@ -59,6 +59,10 @@ class LLMConfig:
     deep_research_agent: str = "deep-research-pro-preview-12-2025"  # Deep Research agent
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
+    # OpenAI-compatible endpoint (vLLM, Ollama, Together AI, etc.)
+    openai_base_url: str = "http://localhost:8000/v1"
+    openai_api_key: str = "no-key"
+    openai_model: str = ""
     # Feature flags
     enable_judgment: bool = True  # Enable LLM-based judgment (Layer 2)
     enable_reflection: bool = True  # Enable reflection analysis (Layer 3)
@@ -106,6 +110,9 @@ def load_config() -> Config:
             deep_research_agent=os.getenv("DEEP_RESEARCH_AGENT", "deep-research-pro-preview-12-2025"),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+            openai_base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:8000/v1"),
+            openai_api_key=os.getenv("OPENAI_API_KEY", "no-key"),
+            openai_model=os.getenv("OPENAI_MODEL", ""),
             enable_judgment=os.getenv("ENABLE_JUDGMENT", "true").lower() == "true",
             enable_reflection=os.getenv("ENABLE_REFLECTION", "true").lower() == "true",
             judgment_thinking_level=os.getenv("JUDGMENT_THINKING_LEVEL", "low"),

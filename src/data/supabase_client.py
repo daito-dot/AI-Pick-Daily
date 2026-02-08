@@ -1364,15 +1364,15 @@ class SupabaseClient:
         """Get the most recent weekly research report for judgment context.
 
         Returns:
-            Dict with external_findings, system_data, batch_date or None
+            Dict with content, metadata, research_date, symbols_mentioned or None
         """
         try:
             result = self._client.table("research_logs").select(
-                "external_findings, system_data, batch_date"
+                "content, metadata, research_date, symbols_mentioned"
             ).eq(
                 "research_type", "market"
             ).order(
-                "batch_date", desc=True
+                "research_date", desc=True
             ).limit(1).execute()
             if result.data:
                 return result.data[0]

@@ -157,6 +157,11 @@ def run_llm_judgment_phase(
 
         total_candidates = len(v1_candidates) + len(v2_candidates)
 
+        # Fetch weekly research for prompt injection
+        weekly_research_text = None
+        if supabase:
+            weekly_research_text = _format_weekly_research(supabase)
+
         # Run V1 portfolio judgment
         v1_final_picks = []
         if v1_candidates and v1_slots > 0:
@@ -173,6 +178,7 @@ def run_llm_judgment_phase(
                 finnhub=finnhub,
                 yfinance=yfinance,
                 performance_stats=v1_perf_stats,
+                weekly_research=weekly_research_text,
             )
             # Safety valve: only accept AI recommendations that passed threshold
             v1_final_picks = [
@@ -200,6 +206,7 @@ def run_llm_judgment_phase(
                 finnhub=finnhub,
                 yfinance=yfinance,
                 performance_stats=v2_perf_stats,
+                weekly_research=weekly_research_text,
             )
             v2_final_picks = [
                 r.symbol for r in v2_result.recommended_buys
@@ -318,12 +325,12 @@ def _format_weekly_research(supabase) -> str | None:
         if not research:
             return None
 
-        findings = research.get("external_findings", "")
+        findings = research.get("content", "")
         if not findings:
             return None
 
-        system_data = research.get("system_data") or {}
-        batch_date = research.get("batch_date", "?")
+        system_data = research.get("metadata") or {}
+        batch_date = research.get("research_date", "?")
 
         lines = [f"[Weekly Research {batch_date}]"]
         # Truncate findings to keep prompt manageable

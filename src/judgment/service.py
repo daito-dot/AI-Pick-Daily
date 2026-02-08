@@ -305,6 +305,7 @@ class JudgmentService:
         available_cash: float,
         news_by_symbol: dict[str, list[dict]] | None = None,
         performance_stats: dict | None = None,
+        weekly_research: str | None = None,
     ) -> PortfolioJudgmentOutput:
         """Generate portfolio-level judgment for all candidates at once.
 
@@ -344,6 +345,7 @@ class JudgmentService:
             available_cash=available_cash,
             news_by_symbol=news_by_symbol,
             performance_stats=performance_stats,
+            weekly_research=weekly_research,
         )
 
         full_prompt = f"{PORTFOLIO_SYSTEM_PROMPT}\n\n{prompt}"

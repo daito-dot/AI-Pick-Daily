@@ -184,13 +184,15 @@ def _save_research_to_db(report) -> None:
 
         supabase._client.table("research_logs").insert({
             "research_type": "market",
-            "external_findings": content,
-            "system_data": {
+            "market_type": "us",
+            "content": content,
+            "metadata": {
                 "sectors": sector_data,
                 "stocks_to_watch": report.stocks_to_watch or [],
                 "stocks_to_avoid": report.stocks_to_avoid or [],
             },
-            "batch_date": today,
+            "symbols_mentioned": symbols[:20],
+            "research_date": today,
         }).execute()
 
         logger.info(f"Saved weekly research to research_logs ({len(content)} chars, {len(symbols)} symbols)")

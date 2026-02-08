@@ -338,3 +338,16 @@ export interface ExitReasonCount {
   exit_reason: string;
   count: number;
 }
+
+export interface ModelPerformanceStats {
+  model_version: string;
+  total_judgments: number;
+  buy_count: number;
+  avoid_count: number;
+  buy_win_count: number;
+  buy_win_rate: number;
+  avg_return_5d: number | null;
+  avg_confidence: number;
+  first_used: string;
+  last_used: string;
+}

@@ -539,6 +539,7 @@ def run_portfolio_judgment(
     finnhub: FinnhubClient | None = None,
     yfinance: "YFinanceClient | None" = None,
     performance_stats: dict | None = None,
+    weekly_research: str | None = None,
 ) -> PortfolioJudgmentOutput:
     """Run portfolio-level judgment on all candidates at once.
 
@@ -561,6 +562,7 @@ def run_portfolio_judgment(
         finnhub: Optional Finnhub client for news
         yfinance: Optional yfinance client for news
         performance_stats: Structured performance data
+        weekly_research: Formatted weekly research context for prompt
 
     Returns:
         PortfolioJudgmentOutput
@@ -597,6 +599,7 @@ def run_portfolio_judgment(
         available_cash=available_cash,
         news_by_symbol=news_by_symbol,
         performance_stats=performance_stats,
+        weekly_research=weekly_research,
     )
 
     # Save individual judgment records for each recommended buy

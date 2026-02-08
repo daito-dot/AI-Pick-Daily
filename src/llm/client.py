@@ -86,5 +86,8 @@ def get_llm_client() -> LLMClient:
     elif provider == "claude":
         from .claude_client import ClaudeClient
         return ClaudeClient()
+    elif provider == "openai":
+        from .openai_client import OpenAIClient
+        return OpenAIClient()
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")

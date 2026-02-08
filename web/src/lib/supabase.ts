@@ -18,6 +18,7 @@ import type {
   ConfidenceCalibrationBucket,
   ExitReasonCount,
   ParameterChangeRecord,
+  ModelPerformanceStats,
 } from '@/types';
 
 // Lazy initialization to handle build-time when env vars may not be set
@@ -1520,6 +1521,116 @@ export async function getParameterChangeLog(
     return (data || []) as ParameterChangeRecord[];
   } catch (error) {
     console.error('getParameterChangeLog error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch model-level performance statistics from judgment_records + judgment_outcomes.
+ * Groups by model_version and computes win rate, avg return, etc.
+ */
+export async function getModelPerformanceStats(
+  marketType: MarketType = 'us'
+): Promise<ModelPerformanceStats[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    // Fetch judgment_records with their outcomes
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select(`
+        model_version,
+        decision,
+        confidence,
+        batch_date,
+        judgment_outcomes(actual_return_5d, outcome_aligned)
+      `)
+      .in('strategy_mode', strategies)
+      .not('model_version', 'eq', 'fallback')
+      .not('model_version', 'eq', '')
+      .order('batch_date', { ascending: false });
+
+    if (error) {
+      console.error('[getModelPerformanceStats] error:', error);
+      return [];
+    }
+
+    if (!data || data.length === 0) return [];
+
+    // Group by model_version
+    const modelMap = new Map<string, {
+      total: number;
+      buys: number;
+      avoids: number;
+      buyWins: number;
+      returns5d: number[];
+      confidences: number[];
+      firstDate: string;
+      lastDate: string;
+    }>();
+
+    for (const row of data) {
+      const model = row.model_version || 'unknown';
+      if (!modelMap.has(model)) {
+        modelMap.set(model, {
+          total: 0, buys: 0, avoids: 0, buyWins: 0,
+          returns5d: [], confidences: [], firstDate: row.batch_date, lastDate: row.batch_date,
+        });
+      }
+      const stats = modelMap.get(model)!;
+      stats.total++;
+      stats.confidences.push(row.confidence || 0);
+
+      if (row.batch_date < stats.firstDate) stats.firstDate = row.batch_date;
+      if (row.batch_date > stats.lastDate) stats.lastDate = row.batch_date;
+
+      if (row.decision === 'buy') {
+        stats.buys++;
+        // Check outcome
+        const outcomes = row.judgment_outcomes as Array<{
+          actual_return_5d: number | null;
+          outcome_aligned: boolean | null;
+        }> | null;
+        if (outcomes && outcomes.length > 0) {
+          const o = outcomes[0];
+          if (o.outcome_aligned === true) stats.buyWins++;
+          if (o.actual_return_5d != null) stats.returns5d.push(o.actual_return_5d);
+        }
+      } else if (row.decision === 'avoid') {
+        stats.avoids++;
+      }
+    }
+
+    // Convert to array
+    const result: ModelPerformanceStats[] = [];
+    for (const [model, stats] of Array.from(modelMap.entries())) {
+      const avgReturn = stats.returns5d.length > 0
+        ? stats.returns5d.reduce((a, b) => a + b, 0) / stats.returns5d.length
+        : null;
+      const avgConf = stats.confidences.length > 0
+        ? stats.confidences.reduce((a, b) => a + b, 0) / stats.confidences.length
+        : 0;
+
+      result.push({
+        model_version: model,
+        total_judgments: stats.total,
+        buy_count: stats.buys,
+        avoid_count: stats.avoids,
+        buy_win_count: stats.buyWins,
+        buy_win_rate: stats.buys > 0 ? (stats.buyWins / stats.buys) * 100 : 0,
+        avg_return_5d: avgReturn,
+        avg_confidence: avgConf,
+        first_used: stats.firstDate,
+        last_used: stats.lastDate,
+      });
+    }
+
+    // Sort by total judgments desc
+    result.sort((a, b) => b.total_judgments - a.total_judgments);
+    return result;
+  } catch (error) {
+    console.error('getModelPerformanceStats error:', error);
     return [];
   }
 }

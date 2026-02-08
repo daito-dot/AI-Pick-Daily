@@ -7,6 +7,7 @@ import {
   getRollingMetrics,
   getConfidenceCalibration,
   getParameterChangeLog,
+  getModelPerformanceStats,
 } from '@/lib/supabase';
 import { PageHeader } from '@/components/ui';
 import { MarketTabs } from '@/components/MarketTabs';
@@ -16,6 +17,7 @@ import {
   MetaMonitorPanel,
   RollingMetricsPanel,
   ConfidenceCalibrationChart,
+  ModelPerformancePanel,
 } from '@/components/insights';
 import type {
   ReflectionRecord,
@@ -26,6 +28,7 @@ import type {
   RollingMetrics,
   ConfidenceCalibrationBucket,
   ParameterChangeRecord,
+  ModelPerformanceStats,
 } from '@/types';
 
 export const revalidate = 300;
@@ -39,6 +42,7 @@ interface InsightsContentProps {
   parameterChanges: ParameterChangeRecord[];
   rollingMetrics: RollingMetrics[];
   calibration: ConfidenceCalibrationBucket[];
+  modelStats: ModelPerformanceStats[];
   isJapan: boolean;
 }
 
@@ -51,6 +55,7 @@ function InsightsContent({
   parameterChanges,
   rollingMetrics,
   calibration,
+  modelStats,
   isJapan,
 }: InsightsContentProps) {
   return (
@@ -58,6 +63,7 @@ function InsightsContent({
       <RollingMetricsPanel metrics={rollingMetrics} isJapan={isJapan} />
       <JudgmentOutcomesPanel stats={stats} trends={trends} isJapan={isJapan} />
       <ConfidenceCalibrationChart buckets={calibration} />
+      <ModelPerformancePanel models={modelStats} />
       <ReflectionPanel reflections={reflections} isJapan={isJapan} />
       <MetaMonitorPanel interventions={interventions} overrides={overrides} parameterChanges={parameterChanges} isJapan={isJapan} />
     </div>
@@ -81,6 +87,8 @@ export default async function InsightsPage() {
     jpCalibration,
     usParamChanges,
     jpParamChanges,
+    usModelStats,
+    jpModelStats,
   ] = await Promise.all([
     getJudgmentOutcomeStats('us'),
     getJudgmentOutcomeStats('jp'),
@@ -97,6 +105,8 @@ export default async function InsightsPage() {
     getConfidenceCalibration('jp'),
     getParameterChangeLog('us'),
     getParameterChangeLog('jp'),
+    getModelPerformanceStats('us'),
+    getModelPerformanceStats('jp'),
   ]);
 
   const usContent = (
@@ -109,6 +119,7 @@ export default async function InsightsPage() {
       parameterChanges={usParamChanges}
       rollingMetrics={usRolling}
       calibration={usCalibration}
+      modelStats={usModelStats}
       isJapan={false}
     />
   );
@@ -123,6 +134,7 @@ export default async function InsightsPage() {
       parameterChanges={jpParamChanges}
       rollingMetrics={jpRolling}
       calibration={jpCalibration}
+      modelStats={jpModelStats}
       isJapan={true}
     />
   );
