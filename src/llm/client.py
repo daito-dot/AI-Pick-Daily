@@ -91,3 +91,27 @@ def get_llm_client() -> LLMClient:
         return OpenAIClient()
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def get_llm_client_for_model(model_name: str | None = None) -> LLMClient:
+    """
+    Get an LLM client appropriate for the given model name.
+
+    If the model name looks like an OpenRouter model (contains '/' and is not
+    a Gemini model), returns an OpenAIClient pointed at OpenRouter.
+    Otherwise, returns the default provider client.
+
+    Args:
+        model_name: Model identifier (e.g. 'moonshotai/kimi-k2.5', 'gemini-3-pro-preview')
+
+    Returns:
+        LLMClient instance
+    """
+    if model_name and "/" in model_name and not model_name.startswith("gemini"):
+        from .openai_client import OpenAIClient
+        return OpenAIClient(
+            base_url=config.llm.openrouter_base_url,
+            api_key=config.llm.openrouter_api_key,
+            default_model=model_name,
+        )
+    return get_llm_client()

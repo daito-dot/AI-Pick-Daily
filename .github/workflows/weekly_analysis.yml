@@ -51,10 +51,12 @@ jobs:
       - name: Run weekly reflection
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
-          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro' }}
+          REFLECTION_MODEL: ${{ vars.REFLECTION_MODEL || 'gemini-3-pro-preview' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1' }}
           ENABLE_REFLECTION: 'true'
           DEBUG: ${{ github.event.inputs.debug || 'false' }}
         run: |
@@ -92,11 +94,13 @@ jobs:
       - name: Run weekly research
         env:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
-          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro' }}
+          DEEP_RESEARCH_MODEL: ${{ vars.DEEP_RESEARCH_MODEL || 'gemini-3-pro-preview' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1' }}
           DEBUG: ${{ github.event.inputs.debug || 'false' }}
         run: |
           python scripts/weekly_research.py

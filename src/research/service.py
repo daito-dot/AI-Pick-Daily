@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from src.llm import get_llm_client, LLMClient
+from src.llm import get_llm_client, get_llm_client_for_model, LLMClient
 from src.config import config
 from .models import (
     ResearchReport,
@@ -78,8 +78,8 @@ class DeepResearchService:
         Args:
             llm_client: Optional LLM client
         """
-        self.llm_client = llm_client or get_llm_client()
         self.model_name = config.llm.deep_research_model
+        self.llm_client = llm_client or get_llm_client_for_model(self.model_name)
         self._use_deep_research_agent = True  # Use Interactions API agent
 
     def run_deep_research_query(
@@ -122,9 +122,9 @@ class DeepResearchService:
 
             return response.content
 
-        except ImportError as e:
+        except (ImportError, AttributeError) as e:
             logger.warning(f"Deep Research agent unavailable: {e}")
-            logger.info("Falling back to gemini-3-pro")
+            logger.info(f"Falling back to {self.model_name}")
 
             # Fallback to standard generation
             prompt = f"""Conduct comprehensive research on the following topic:

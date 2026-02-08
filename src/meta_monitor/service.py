@@ -5,7 +5,8 @@ Entry point called as Step 7 of daily_review.
 
 import logging
 
-from src.llm import get_llm_client
+from src.config import config
+from src.llm import get_llm_client_for_model
 from .detector import (
     compute_rolling_metrics,
     detect_degradation,
@@ -76,7 +77,7 @@ def run_meta_monitor(supabase, strategy_mode: str) -> None:
 
     # 6. LLM diagnosis
     try:
-        llm_client = get_llm_client()
+        llm_client = get_llm_client_for_model(config.llm.scoring_model)
         diagnosis = diagnose(supabase, llm_client, strategy_mode, signals, metrics)
     except Exception as e:
         logger.error(f"Diagnosis failed for {strategy_mode}: {e}")

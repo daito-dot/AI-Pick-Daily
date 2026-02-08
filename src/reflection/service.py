@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from src.llm import get_llm_client, LLMClient
+from src.llm import get_llm_client_for_model, LLMClient
 from src.config import config
 from src.data.supabase_client import SupabaseClient
 from .models import (
@@ -47,9 +47,9 @@ class ReflectionService:
             llm_client: Optional LLM client
             supabase_client: Optional Supabase client for data access
         """
-        self.llm_client = llm_client or get_llm_client()
-        self.supabase = supabase_client or SupabaseClient()
         self.model_name = config.llm.reflection_model
+        self.llm_client = llm_client or get_llm_client_for_model(self.model_name)
+        self.supabase = supabase_client or SupabaseClient()
 
     def run_weekly_reflection(
         self,
