@@ -322,6 +322,18 @@ export interface ConfidenceCalibrationBucket {
   avgReturn: number;
 }
 
+export interface ParameterChangeRecord {
+  id: number;
+  strategy_mode: string;
+  param_name: string;
+  old_value: number | null;
+  new_value: number;
+  changed_by: string;
+  reason: string | null;
+  intervention_id: number | null;
+  created_at: string;
+}
+
 export interface ExitReasonCount {
   exit_reason: string;
   count: number;

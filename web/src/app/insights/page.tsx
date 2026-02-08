@@ -6,6 +6,7 @@ import {
   getReflections,
   getRollingMetrics,
   getConfidenceCalibration,
+  getParameterChangeLog,
 } from '@/lib/supabase';
 import { PageHeader } from '@/components/ui';
 import { MarketTabs } from '@/components/MarketTabs';
@@ -24,6 +25,7 @@ import type {
   PromptOverride,
   RollingMetrics,
   ConfidenceCalibrationBucket,
+  ParameterChangeRecord,
 } from '@/types';
 
 export const revalidate = 300;
@@ -34,6 +36,7 @@ interface InsightsContentProps {
   reflections: ReflectionRecord[];
   interventions: MetaIntervention[];
   overrides: PromptOverride[];
+  parameterChanges: ParameterChangeRecord[];
   rollingMetrics: RollingMetrics[];
   calibration: ConfidenceCalibrationBucket[];
   isJapan: boolean;
@@ -45,6 +48,7 @@ function InsightsContent({
   reflections,
   interventions,
   overrides,
+  parameterChanges,
   rollingMetrics,
   calibration,
   isJapan,
@@ -55,7 +59,7 @@ function InsightsContent({
       <JudgmentOutcomesPanel stats={stats} trends={trends} isJapan={isJapan} />
       <ConfidenceCalibrationChart buckets={calibration} />
       <ReflectionPanel reflections={reflections} isJapan={isJapan} />
-      <MetaMonitorPanel interventions={interventions} overrides={overrides} isJapan={isJapan} />
+      <MetaMonitorPanel interventions={interventions} overrides={overrides} parameterChanges={parameterChanges} isJapan={isJapan} />
     </div>
   );
 }
@@ -75,6 +79,8 @@ export default async function InsightsPage() {
     jpRolling,
     usCalibration,
     jpCalibration,
+    usParamChanges,
+    jpParamChanges,
   ] = await Promise.all([
     getJudgmentOutcomeStats('us'),
     getJudgmentOutcomeStats('jp'),
@@ -89,6 +95,8 @@ export default async function InsightsPage() {
     getRollingMetrics('jp'),
     getConfidenceCalibration('us'),
     getConfidenceCalibration('jp'),
+    getParameterChangeLog('us'),
+    getParameterChangeLog('jp'),
   ]);
 
   const usContent = (
@@ -98,6 +106,7 @@ export default async function InsightsPage() {
       reflections={reflections}
       interventions={usInterventions}
       overrides={usOverrides}
+      parameterChanges={usParamChanges}
       rollingMetrics={usRolling}
       calibration={usCalibration}
       isJapan={false}
@@ -111,6 +120,7 @@ export default async function InsightsPage() {
       reflections={reflections}
       interventions={jpInterventions}
       overrides={jpOverrides}
+      parameterChanges={jpParamChanges}
       rollingMetrics={jpRolling}
       calibration={jpCalibration}
       isJapan={true}

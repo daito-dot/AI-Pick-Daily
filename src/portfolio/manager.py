@@ -114,6 +114,27 @@ class PortfolioManager:
         self.yfinance = yfinance
         self.market_config = market_config
         self._txn_costs = market_config.transaction_costs if market_config else None
+        self._params_cache: dict[str, dict[str, float]] = {}
+
+    def _get_params(self, strategy_mode: str) -> dict[str, float]:
+        """Load strategy parameters from DB with caching and fallback."""
+        if strategy_mode not in self._params_cache:
+            try:
+                from src.meta_monitor.parameters import get_parameters
+                self._params_cache[strategy_mode] = get_parameters(
+                    self.supabase, strategy_mode
+                )
+            except Exception:
+                self._params_cache[strategy_mode] = {
+                    "take_profit_pct": TAKE_PROFIT_PCT,
+                    "stop_loss_pct": STOP_LOSS_PCT,
+                    "max_hold_days": MAX_HOLD_DAYS,
+                    "absolute_max_hold_days": ABSOLUTE_MAX_HOLD_DAYS,
+                    "max_positions": MAX_POSITIONS,
+                    "mdd_warning_pct": MDD_WARNING_THRESHOLD,
+                    "mdd_stop_new_pct": MDD_STOP_NEW_THRESHOLD,
+                }
+        return self._params_cache[strategy_mode]
 
     def get_drawdown_status(self, strategy_mode: str) -> DrawdownStatus:
         """
@@ -142,8 +163,12 @@ class PortfolioManager:
 
         current_mdd = float(snapshot.get("max_drawdown", 0) or 0)
 
-        # Determine status based on MDD thresholds
-        if current_mdd > MDD_WARNING_THRESHOLD:
+        # Determine status based on MDD thresholds (DB-backed)
+        params = self._get_params(strategy_mode)
+        mdd_warning = params.get("mdd_warning_pct", MDD_WARNING_THRESHOLD)
+        mdd_stop = params.get("mdd_stop_new_pct", MDD_STOP_NEW_THRESHOLD)
+
+        if current_mdd > mdd_warning:
             return DrawdownStatus(
                 current_mdd=current_mdd,
                 can_open_positions=True,
@@ -151,7 +176,7 @@ class PortfolioManager:
                 status="normal",
                 message=f"MDD {current_mdd:.1f}% within normal range",
             )
-        elif current_mdd > MDD_STOP_NEW_THRESHOLD:
+        elif current_mdd > mdd_stop:
             return DrawdownStatus(
                 current_mdd=current_mdd,
                 can_open_positions=True,
@@ -444,8 +469,10 @@ class PortfolioManager:
         if num_picks == 0:
             return 0.0
 
-        # Calculate slots available
-        slots_available = MAX_POSITIONS - current_positions
+        # Calculate slots available (use first strategy's params as approximation)
+        slots_available = int(self._get_params("conservative").get(
+            "max_positions", MAX_POSITIONS
+        )) - current_positions
         if slots_available <= 0:
             return 0.0
 
@@ -646,10 +673,17 @@ class PortfolioManager:
             position.current_price = current_price
             position.current_pnl_pct = pnl_pct
 
+            # Load strategy-specific parameters from DB
+            p = self._get_params(position.strategy_mode)
+            stop_loss = p.get("stop_loss_pct", STOP_LOSS_PCT)
+            take_profit = p.get("take_profit_pct", TAKE_PROFIT_PCT)
+            max_hold = int(p.get("max_hold_days", MAX_HOLD_DAYS))
+            abs_max_hold = int(p.get("absolute_max_hold_days", ABSOLUTE_MAX_HOLD_DAYS))
+
             # === HARD EXITS (no AI override) ===
 
             # 1. Stop Loss
-            if pnl_pct <= STOP_LOSS_PCT:
+            if pnl_pct <= stop_loss:
                 exit_signals.append(ExitSignal(
                     position=position,
                     reason="stop_loss",
@@ -671,7 +705,7 @@ class PortfolioManager:
                 continue
 
             # 3. Absolute Max Hold (hard limit, even if AI says hold)
-            if position.hold_days >= ABSOLUTE_MAX_HOLD_DAYS:
+            if position.hold_days >= abs_max_hold:
                 exit_signals.append(ExitSignal(
                     position=position,
                     reason="absolute_max_hold",
@@ -686,7 +720,7 @@ class PortfolioManager:
             soft_trigger = None
 
             # 4. Take Profit (priority: highest among soft exits)
-            if pnl_pct >= TAKE_PROFIT_PCT:
+            if pnl_pct >= take_profit:
                 soft_trigger = "take_profit"
 
             # 5. Score Drop (only if take_profit didn't fire)
@@ -697,7 +731,7 @@ class PortfolioManager:
                     soft_trigger = "score_drop"
 
             # 6. Max Hold (independent check — was skipped when current_scores existed)
-            if soft_trigger is None and position.hold_days >= MAX_HOLD_DAYS:
+            if soft_trigger is None and position.hold_days >= max_hold:
                 soft_trigger = "max_hold"
 
             if soft_trigger is None:
@@ -750,24 +784,27 @@ class PortfolioManager:
 
             pnl_pct = ((current_price - position.entry_price) / position.entry_price) * 100
 
+            # Load strategy-specific parameters
+            p = self._get_params(position.strategy_mode)
+
             # Skip hard exits
-            if pnl_pct <= STOP_LOSS_PCT:
+            if pnl_pct <= p.get("stop_loss_pct", STOP_LOSS_PCT):
                 continue
             if market_regime == "crisis":
                 continue
-            if position.hold_days >= ABSOLUTE_MAX_HOLD_DAYS:
+            if position.hold_days >= int(p.get("absolute_max_hold_days", ABSOLUTE_MAX_HOLD_DAYS)):
                 continue
 
             # Check soft triggers
             trigger = None
-            if pnl_pct >= TAKE_PROFIT_PCT:
+            if pnl_pct >= p.get("take_profit_pct", TAKE_PROFIT_PCT):
                 trigger = "take_profit"
             elif current_scores:
                 current_score = current_scores.get(position.symbol)
                 threshold = thresholds.get(position.strategy_mode, 60)
                 if current_score is not None and current_score < threshold:
                     trigger = "score_drop"
-            elif position.hold_days >= MAX_HOLD_DAYS:
+            elif position.hold_days >= int(p.get("max_hold_days", MAX_HOLD_DAYS)):
                 trigger = "max_hold"
 
             if trigger:

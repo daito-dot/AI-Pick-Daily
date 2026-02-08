@@ -4,14 +4,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from .models import RollingMetrics, DegradationSignal
+from .parameters import get_parameter
 
 logger = logging.getLogger(__name__)
 
-# Detection thresholds
-WIN_RATE_DROP_RATIO = 0.7  # 7d < 30d * 0.7 triggers
-RETURN_DECLINE_THRESHOLD = -1.0  # 7d avg return < -1.0%
-MISSED_SPIKE_THRESHOLD = 0.30  # >30% missed rate
-MIN_JUDGMENTS_FOR_DETECTION = 5  # Need at least 5 judgments in 7d window
+# Fallback detection thresholds (used when DB unavailable)
+WIN_RATE_DROP_RATIO = 0.7
+RETURN_DECLINE_THRESHOLD = -1.0
+MISSED_SPIKE_THRESHOLD = 0.30
+CONFIDENCE_DRIFT_THRESHOLD = 0.05
+MIN_JUDGMENTS_FOR_DETECTION = 5
 
 
 def compute_rolling_metrics(supabase, strategy_mode: str) -> RollingMetrics:
@@ -25,6 +27,8 @@ def compute_rolling_metrics(supabase, strategy_mode: str) -> RollingMetrics:
     metrics_7d = _compute_window_metrics(supabase, strategy_mode, days=7)
     metrics_30d = _compute_window_metrics(supabase, strategy_mode, days=30)
     missed_rate_7d = _compute_missed_rate(supabase, strategy_mode, days=7)
+    confidence_7d = _compute_avg_confidence(supabase, strategy_mode, days=7)
+    confidence_30d = _compute_avg_confidence(supabase, strategy_mode, days=30)
 
     metrics = RollingMetrics(
         strategy_mode=strategy_mode,
@@ -36,6 +40,8 @@ def compute_rolling_metrics(supabase, strategy_mode: str) -> RollingMetrics:
         missed_rate_7d=missed_rate_7d,
         total_judgments_7d=metrics_7d["total"],
         total_judgments_30d=metrics_30d["total"],
+        avg_confidence_7d=confidence_7d,
+        avg_confidence_30d=confidence_30d,
     )
 
     # Cache to DB
@@ -133,6 +139,36 @@ def _compute_missed_rate(supabase, strategy_mode: str, days: int) -> float | Non
         return None
 
 
+def _compute_avg_confidence(supabase, strategy_mode: str, days: int) -> float | None:
+    """Compute average AI confidence score for a time window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    try:
+        rows = (
+            supabase._client.table("judgment_records")
+            .select("confidence")
+            .eq("strategy_mode", strategy_mode)
+            .gte("batch_date", cutoff)
+            .not_.is_("confidence", "null")
+            .execute()
+            .data
+            or []
+        )
+
+        if not rows:
+            return None
+
+        values = [float(r["confidence"]) for r in rows if r.get("confidence") is not None]
+        if not values:
+            return None
+
+        return round(sum(values) / len(values), 3)
+
+    except Exception as e:
+        logger.warning(f"Failed to compute avg confidence for {strategy_mode}: {e}")
+        return None
+
+
 def _save_metrics(supabase, metrics: RollingMetrics) -> None:
     """Cache rolling metrics to DB with upsert."""
     try:
@@ -147,6 +183,8 @@ def _save_metrics(supabase, metrics: RollingMetrics) -> None:
                 "missed_rate_7d": metrics.missed_rate_7d,
                 "total_judgments_7d": metrics.total_judgments_7d,
                 "total_judgments_30d": metrics.total_judgments_30d,
+                "avg_confidence_7d": metrics.avg_confidence_7d,
+                "avg_confidence_30d": metrics.avg_confidence_30d,
             },
             on_conflict="strategy_mode,metric_date",
         ).execute()
@@ -154,12 +192,28 @@ def _save_metrics(supabase, metrics: RollingMetrics) -> None:
         logger.warning(f"Failed to save rolling metrics: {e}")
 
 
-def detect_degradation(metrics: RollingMetrics) -> list[DegradationSignal]:
+def detect_degradation(
+    metrics: RollingMetrics, supabase=None
+) -> list[DegradationSignal]:
     """Detect performance degradation from rolling metrics.
 
     Returns list of signals; empty list means no degradation.
+    If supabase is provided, reads thresholds from DB; otherwise uses fallback constants.
     """
     signals: list[DegradationSignal] = []
+
+    # Load thresholds from DB (with fallback to module constants)
+    if supabase:
+        sm = metrics.strategy_mode
+        win_rate_drop_ratio = get_parameter(supabase, sm, "win_rate_drop_ratio")
+        return_decline_threshold = get_parameter(supabase, sm, "return_decline_threshold")
+        missed_spike_threshold = get_parameter(supabase, sm, "missed_spike_threshold")
+        confidence_drift_threshold = get_parameter(supabase, sm, "confidence_drift_threshold")
+    else:
+        win_rate_drop_ratio = WIN_RATE_DROP_RATIO
+        return_decline_threshold = RETURN_DECLINE_THRESHOLD
+        missed_spike_threshold = MISSED_SPIKE_THRESHOLD
+        confidence_drift_threshold = CONFIDENCE_DRIFT_THRESHOLD
 
     # Skip if insufficient data
     if metrics.total_judgments_7d < MIN_JUDGMENTS_FOR_DETECTION:
@@ -176,7 +230,7 @@ def detect_degradation(metrics: RollingMetrics) -> list[DegradationSignal]:
         and metrics.win_rate_30d > 0
     ):
         ratio = metrics.win_rate_7d / metrics.win_rate_30d
-        if ratio < WIN_RATE_DROP_RATIO:
+        if ratio < win_rate_drop_ratio:
             signals.append(
                 DegradationSignal(
                     trigger_type="win_rate_drop",
@@ -191,34 +245,56 @@ def detect_degradation(metrics: RollingMetrics) -> list[DegradationSignal]:
             )
 
     # 2. Return decline: 7d average return is negative
-    if metrics.avg_return_7d is not None and metrics.avg_return_7d < RETURN_DECLINE_THRESHOLD:
+    if metrics.avg_return_7d is not None and metrics.avg_return_7d < return_decline_threshold:
         signals.append(
             DegradationSignal(
                 trigger_type="return_decline",
                 severity="warning",
                 current_value=metrics.avg_return_7d,
-                baseline_value=RETURN_DECLINE_THRESHOLD,
+                baseline_value=return_decline_threshold,
                 details=(
                     f"7d avg return ({metrics.avg_return_7d:.2f}%) "
-                    f"below threshold ({RETURN_DECLINE_THRESHOLD}%)"
+                    f"below threshold ({return_decline_threshold}%)"
                 ),
             )
         )
 
     # 3. Missed spike: too many profitable stocks being avoided
-    if metrics.missed_rate_7d is not None and metrics.missed_rate_7d > MISSED_SPIKE_THRESHOLD * 100:
+    if metrics.missed_rate_7d is not None and metrics.missed_rate_7d > missed_spike_threshold * 100:
         signals.append(
             DegradationSignal(
                 trigger_type="missed_spike",
                 severity="warning",
                 current_value=metrics.missed_rate_7d,
-                baseline_value=MISSED_SPIKE_THRESHOLD * 100,
+                baseline_value=missed_spike_threshold * 100,
                 details=(
                     f"7d missed rate ({metrics.missed_rate_7d:.1f}%) "
-                    f"exceeds threshold ({MISSED_SPIKE_THRESHOLD * 100:.0f}%)"
+                    f"exceeds threshold ({missed_spike_threshold * 100:.0f}%)"
                 ),
             )
         )
+
+    # 4. Confidence drift: significant divergence between 7d and 30d avg confidence
+    if (
+        metrics.avg_confidence_7d is not None
+        and metrics.avg_confidence_30d is not None
+    ):
+        drift = abs(metrics.avg_confidence_7d - metrics.avg_confidence_30d)
+        if drift > confidence_drift_threshold:
+            direction = "上昇" if metrics.avg_confidence_7d > metrics.avg_confidence_30d else "低下"
+            signals.append(
+                DegradationSignal(
+                    trigger_type="confidence_drift",
+                    severity="warning",
+                    current_value=metrics.avg_confidence_7d,
+                    baseline_value=metrics.avg_confidence_30d,
+                    details=(
+                        f"Confidence drift detected: 7d avg ({metrics.avg_confidence_7d:.3f}) vs "
+                        f"30d avg ({metrics.avg_confidence_30d:.3f}), "
+                        f"差分 {drift:.3f} ({direction})"
+                    ),
+                )
+            )
 
     # Upgrade to critical if multiple signals
     if len(signals) >= 2:

@@ -17,6 +17,7 @@ import type {
   RollingMetrics,
   ConfidenceCalibrationBucket,
   ExitReasonCount,
+  ParameterChangeRecord,
 } from '@/types';
 
 // Lazy initialization to handle build-time when env vars may not be set
@@ -1489,6 +1490,36 @@ export async function getExitReasonDistribution(
       .sort((a, b) => b.count - a.count);
   } catch (error) {
     console.error('getExitReasonDistribution error:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch parameter change log (audit trail for strategy parameter adjustments)
+ */
+export async function getParameterChangeLog(
+  marketType: MarketType = 'us',
+  limit: number = 30
+): Promise<ParameterChangeRecord[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data, error } = await supabase
+      .from('parameter_change_log')
+      .select('*')
+      .in('strategy_mode', strategies)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('[getParameterChangeLog] error:', error);
+      return [];
+    }
+
+    return (data || []) as ParameterChangeRecord[];
+  } catch (error) {
+    console.error('getParameterChangeLog error:', error);
     return [];
   }
 }

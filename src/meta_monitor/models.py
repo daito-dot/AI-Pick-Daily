@@ -17,6 +17,8 @@ class RollingMetrics:
     missed_rate_7d: float | None
     total_judgments_7d: int
     total_judgments_30d: int
+    avg_confidence_7d: float | None = None
+    avg_confidence_30d: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -29,6 +31,8 @@ class RollingMetrics:
             "missed_rate_7d": self.missed_rate_7d,
             "total_judgments_7d": self.total_judgments_7d,
             "total_judgments_30d": self.total_judgments_30d,
+            "avg_confidence_7d": self.avg_confidence_7d,
+            "avg_confidence_30d": self.avg_confidence_30d,
         }
 
 
@@ -36,7 +40,7 @@ class RollingMetrics:
 class DegradationSignal:
     """A detected performance degradation signal."""
 
-    trigger_type: str  # 'win_rate_drop' | 'missed_spike' | 'return_decline'
+    trigger_type: str  # 'win_rate_drop' | 'missed_spike' | 'return_decline' | 'confidence_drift'
     severity: str  # 'warning' | 'critical'
     current_value: float
     baseline_value: float

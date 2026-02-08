@@ -5,10 +5,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from .models import Diagnosis, InterventionResult, RollingMetrics
+from .parameters import get_parameter, set_parameter
 
 logger = logging.getLogger(__name__)
 
-# Safety limits
+# Fallback safety limits (used when DB is unavailable)
 MAX_THRESHOLD_CHANGE = 10
 MAX_WEIGHT_CHANGE = 0.1
 MAX_PROMPT_LENGTH = 500
@@ -49,6 +50,11 @@ def execute_actions(
                 if result:
                     actions_taken.append(result)
 
+            elif action_type == "parameter_adjust":
+                result = _apply_parameter_adjust(supabase, strategy_mode, action)
+                if result:
+                    actions_taken.append(result)
+
             else:
                 logger.warning(f"Unknown action type: {action_type}")
 
@@ -63,9 +69,10 @@ def execute_actions(
             pre_metrics=pre_metrics,
         )
 
-    # Record intervention
+    # Record intervention (cooldown from DB)
+    cooldown_days = int(get_parameter(supabase, strategy_mode, "cooldown_days"))
     cooldown_until = (
-        datetime.now(timezone.utc) + timedelta(days=COOLDOWN_DAYS)
+        datetime.now(timezone.utc) + timedelta(days=cooldown_days)
     ).isoformat()
 
     try:
@@ -122,8 +129,9 @@ def _apply_prompt_override(supabase, strategy_mode: str, action: dict) -> dict |
         text = text[:MAX_PROMPT_LENGTH]
         logger.warning(f"Prompt override truncated to {MAX_PROMPT_LENGTH} chars")
 
+    prompt_expiry_days = int(get_parameter(supabase, strategy_mode, "prompt_expiry_days"))
     expires_at = (
-        datetime.now(timezone.utc) + timedelta(days=PROMPT_EXPIRY_DAYS)
+        datetime.now(timezone.utc) + timedelta(days=prompt_expiry_days)
     ).isoformat()
 
     try:
@@ -160,8 +168,9 @@ def _apply_threshold_adjust(supabase, strategy_mode: str, action: dict) -> dict 
     if not change:
         return None
 
-    # Enforce max change
-    change = max(-MAX_THRESHOLD_CHANGE, min(MAX_THRESHOLD_CHANGE, change))
+    # Enforce max change (from DB)
+    max_change = get_parameter(supabase, strategy_mode, "max_threshold_change")
+    change = max(-max_change, min(max_change, change))
 
     config = supabase.get_scoring_config(strategy_mode)
     if not config:
@@ -202,8 +211,9 @@ def _apply_weight_adjust(supabase, strategy_mode: str, action: dict) -> dict | N
     if not factor or not change:
         return None
 
-    # Enforce max change
-    change = max(-MAX_WEIGHT_CHANGE, min(MAX_WEIGHT_CHANGE, change))
+    # Enforce max change (from DB)
+    max_change = get_parameter(supabase, strategy_mode, "max_weight_change")
+    change = max(-max_change, min(max_change, change))
 
     config = supabase.get_scoring_config(strategy_mode)
     if not config:
@@ -244,6 +254,48 @@ def _apply_weight_adjust(supabase, strategy_mode: str, action: dict) -> dict | N
     except Exception as e:
         logger.error(f"Failed to update weights: {e}")
         return None
+
+
+def _apply_parameter_adjust(
+    supabase, strategy_mode: str, action: dict
+) -> dict | None:
+    """Apply a strategy parameter adjustment via the DB.
+
+    Uses set_parameter() which enforces min/max/step bounds automatically.
+    """
+    param_name = action.get("param_name", "")
+    change = action.get("change", 0)
+    if not param_name or not change:
+        return None
+
+    old_value = get_parameter(supabase, strategy_mode, param_name)
+    new_value = old_value + change
+
+    success = set_parameter(
+        supabase,
+        strategy_mode,
+        param_name,
+        new_value,
+        changed_by="meta_agent",
+        reason=action.get("rationale", "Meta-monitor auto-adjustment"),
+    )
+
+    if not success:
+        return None
+
+    # Re-read to get the clamped value
+    actual_new = get_parameter(supabase, strategy_mode, param_name)
+    logger.info(
+        f"Parameter adjusted for {strategy_mode}/{param_name}: "
+        f"{old_value} -> {actual_new}"
+    )
+    return {
+        "type": "parameter_adjust",
+        "param_name": param_name,
+        "old_value": old_value,
+        "new_value": actual_new,
+        "trigger_type": "parameter_adjust",
+    }
 
 
 def evaluate_past_interventions(supabase, strategy_mode: str) -> None:
@@ -370,6 +422,18 @@ def _rollback_intervention(supabase, intervention: dict) -> None:
                     f"Weight rollback noted for {action.get('factor')} "
                     f"(manual review recommended)"
                 )
+
+            elif action_type == "parameter_adjust":
+                old_value = action.get("old_value")
+                param_name = action.get("param_name")
+                if old_value is not None and param_name:
+                    set_parameter(
+                        supabase, strategy_mode, param_name, old_value,
+                        changed_by="meta_agent",
+                        reason=f"Rollback of intervention #{intervention_id}",
+                        intervention_id=intervention_id,
+                    )
+                    logger.info(f"Restored {param_name} to {old_value}")
 
         except Exception as e:
             logger.error(f"Rollback failed for action {action_type}: {e}")

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.llm import LLMClient
 from .models import DegradationSignal, Diagnosis, RollingMetrics
+from .parameters import get_all_parameters_with_bounds
 from .prompts import META_DIAGNOSIS_SYSTEM_PROMPT, build_diagnosis_prompt
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def diagnose(
     recent_judgments = _get_recent_judgments_with_outcomes(supabase, strategy_mode, days=7)
     current_config = _get_current_config(supabase, strategy_mode)
     active_overrides = _get_active_overrides(supabase, strategy_mode)
+    strategy_parameters = get_all_parameters_with_bounds(supabase, strategy_mode)
 
     # Build prompt
     signals_dicts = [
@@ -49,6 +51,7 @@ def diagnose(
         recent_judgments=recent_judgments,
         current_config=current_config,
         active_overrides=active_overrides,
+        strategy_parameters=strategy_parameters,
     )
 
     full_prompt = f"{META_DIAGNOSIS_SYSTEM_PROMPT}\n\n{prompt}"

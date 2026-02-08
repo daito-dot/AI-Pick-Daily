@@ -5,8 +5,13 @@ META_DIAGNOSIS_SYSTEM_PROMPT = """あなたは株式AIシステムのメタ監�
 
 以下のアクションタイプが利用可能です:
 1. prompt_override: 判断プロンプトに追加ガイダンスを注入（最大500文字）
-2. threshold_adjust: スコア閾値の調整（±10以内）
-3. weight_adjust: ファクター重みの調整（±0.1以内）
+2. threshold_adjust: スコア閾値の調整（step制約あり）
+3. weight_adjust: ファクター重みの調整（step制約あり）
+4. parameter_adjust: ポートフォリオ・検知パラメータの調整
+   利用可能パラメータ: take_profit_pct, stop_loss_pct, max_hold_days,
+   max_positions, mdd_warning_pct, win_rate_drop_ratio, return_decline_threshold,
+   missed_spike_threshold, cooldown_days, prompt_expiry_days, confidence_drift_threshold
+   ※各パラメータにはmin/max/stepの安全制約があり、自動的にクランプされます
 
 回答は必ず以下のJSON形式で返してください:
 {
@@ -29,6 +34,12 @@ META_DIAGNOSIS_SYSTEM_PROMPT = """あなたは株式AIシステムのメタ監�
       "factor": "momentum",
       "change": 0.05,
       "rationale": "理由"
+    },
+    {
+      "type": "parameter_adjust",
+      "param_name": "take_profit_pct",
+      "change": -2.0,
+      "rationale": "理由"
     }
   ]
 }"""
@@ -42,6 +53,7 @@ def build_diagnosis_prompt(
     recent_judgments: list[dict],
     current_config: dict,
     active_overrides: list[dict],
+    strategy_parameters: list[dict] | None = None,
 ) -> str:
     """Build diagnosis prompt with all available context."""
 
@@ -113,6 +125,18 @@ def build_diagnosis_prompt(
     else:
         overrides_text = "なし"
 
+    # Format strategy parameters
+    if strategy_parameters:
+        params_lines = []
+        for p in strategy_parameters:
+            params_lines.append(
+                f"- {p['param_name']}: {p['current_value']} "
+                f"(範囲: {p['min_value']}-{p['max_value']}, step: {p['step']})"
+            )
+        params_text = "\n".join(params_lines)
+    else:
+        params_text = "パラメータ情報なし"
+
     return f"""# パフォーマンス劣化の診断
 
 ## 戦略: {strategy_mode}
@@ -132,14 +156,18 @@ def build_diagnosis_prompt(
 ## 現在のプロンプトオーバーライド
 {overrides_text}
 
+## 現在のパラメータ設定
+{params_text}
+
 ## 診断タスク
 
 上記のデータを分析し、パフォーマンス劣化の根本原因を特定してください。
-そして、利用可能なアクション（prompt_override, threshold_adjust, weight_adjust）から
+そして、利用可能なアクション（prompt_override, threshold_adjust, weight_adjust, parameter_adjust）から
 最も効果的な修正を1-3個提案してください。
 
 注意:
 - 変更は控えめに（大きな変更より小さな調整を優先）
 - 市場環境の変化（レジーム転換）が原因の場合はプロンプト修正を優先
+- parameter_adjustでは各パラメータのstep制約に注意（1回の変更はstep以内に制限されます）
 - データ不足が原因の場合は介入を見送る判断も可
 - 回答は指定のJSON形式で返してください"""

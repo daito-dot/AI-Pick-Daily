@@ -45,6 +45,8 @@ def make_metrics(
         missed_rate_7d=missed_rate_7d,
         total_judgments_7d=total_7d,
         total_judgments_30d=total_30d,
+        avg_confidence_7d=None,
+        avg_confidence_30d=None,
     )
 
 
@@ -62,11 +64,22 @@ def make_supabase_mock():
             "sentiment": 0.25,
         },
     }
-    # Chain mock for _client.table().insert().execute()
-    mock._client.table.return_value.insert.return_value.execute.return_value = MagicMock(
-        data=[{"id": 42}]
-    )
-    mock._client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    # Per-table mock dispatcher: strategy_parameters raises to trigger fallback defaults
+    table_mocks = {}
+    strategy_params_mock = MagicMock()
+    strategy_params_mock.select.side_effect = Exception("mock: table not available")
+    table_mocks["strategy_parameters"] = strategy_params_mock
+
+    default_table_mock = MagicMock()
+    default_table_mock.insert.return_value.execute.return_value = MagicMock(data=[{"id": 42}])
+    default_table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+    default_table_mock.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    def table_dispatcher(name):
+        return table_mocks.get(name, default_table_mock)
+
+    mock._client.table = table_dispatcher
     return mock
 
 
@@ -356,9 +369,7 @@ class TestExecuteActions:
 
         result = execute_actions(supabase, diagnosis, "conservative", metrics)
         assert result.intervention_id == 42
-        # Verify insert was called on meta_interventions
-        insert_call = supabase._client.table.return_value.insert
-        assert insert_call.called
+        assert len(result.actions_taken) == 1
 
 
 # ─── Model Tests ──────────────────────────────────────

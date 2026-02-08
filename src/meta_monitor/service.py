@@ -49,7 +49,7 @@ def run_meta_monitor(supabase, strategy_mode: str) -> None:
     )
 
     # 3. Detect degradation
-    signals = detect_degradation(metrics)
+    signals = detect_degradation(metrics, supabase=supabase)
     if not signals:
         logger.info(f"No degradation detected for {strategy_mode}")
         return

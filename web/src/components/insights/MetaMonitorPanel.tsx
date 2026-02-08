@@ -1,11 +1,12 @@
 'use client';
 
 import { Card, Badge, StatCard, EmptyState } from '@/components/ui';
-import type { MetaIntervention, PromptOverride } from '@/types';
+import type { MetaIntervention, PromptOverride, ParameterChangeRecord } from '@/types';
 
 interface MetaMonitorPanelProps {
   interventions: MetaIntervention[];
   overrides: PromptOverride[];
+  parameterChanges: ParameterChangeRecord[];
   isJapan: boolean;
 }
 
@@ -25,8 +26,23 @@ function TriggerBadge({ type }: { type: string }) {
   );
 }
 
-export function MetaMonitorPanel({ interventions, overrides, isJapan }: MetaMonitorPanelProps) {
-  const hasData = interventions.length > 0 || overrides.length > 0;
+const CHANGED_BY_STYLES: Record<string, { label: string; className: string }> = {
+  meta_agent: { label: 'AI', className: 'bg-purple-100 text-purple-800' },
+  manual: { label: '手動', className: 'bg-gray-100 text-gray-700' },
+  system: { label: 'System', className: 'bg-blue-100 text-blue-800' },
+};
+
+function ChangedByBadge({ changedBy }: { changedBy: string }) {
+  const style = CHANGED_BY_STYLES[changedBy] || { label: changedBy, className: 'bg-gray-100 text-gray-700' };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${style.className}`}>
+      {style.label}
+    </span>
+  );
+}
+
+export function MetaMonitorPanel({ interventions, overrides, parameterChanges, isJapan }: MetaMonitorPanelProps) {
+  const hasData = interventions.length > 0 || overrides.length > 0 || parameterChanges.length > 0;
 
   const latestIntervention = interventions[0] ?? null;
   const cooldownActive = latestIntervention?.cooldown_until
@@ -140,6 +156,53 @@ export function MetaMonitorPanel({ interventions, overrides, isJapan }: MetaMoni
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Parameter Change History */}
+      {parameterChanges.length > 0 && (
+        <Card>
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">パラメータ変更履歴</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">日付</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">戦略</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">パラメータ</th>
+                  <th className="text-right py-2 px-3 text-gray-500 font-medium">変更</th>
+                  <th className="text-center py-2 px-3 text-gray-500 font-medium">変更者</th>
+                  <th className="text-left py-2 px-3 text-gray-500 font-medium">理由</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parameterChanges.map((row) => (
+                  <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50">
+                    <td className="py-2 px-3 text-gray-600 whitespace-nowrap">
+                      {row.created_at.slice(5, 10)}
+                    </td>
+                    <td className="py-2 px-3">
+                      <Badge variant="strategy" value={row.strategy_mode} />
+                    </td>
+                    <td className="py-2 px-3 text-gray-700 font-mono text-xs">
+                      {row.param_name}
+                    </td>
+                    <td className="text-right py-2 px-3 font-mono text-xs whitespace-nowrap">
+                      <span className="text-gray-400">{row.old_value ?? '---'}</span>
+                      <span className="mx-1 text-gray-300">&rarr;</span>
+                      <span className="text-gray-800 font-semibold">{row.new_value}</span>
+                    </td>
+                    <td className="text-center py-2 px-3">
+                      <ChangedByBadge changedBy={row.changed_by} />
+                    </td>
+                    <td className="py-2 px-3 text-gray-500 max-w-xs truncate text-xs" title={row.reason || ''}>
+                      {row.reason || '---'}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
