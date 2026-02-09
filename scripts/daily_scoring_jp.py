@@ -614,7 +614,7 @@ def main():
             "v2_picks": v2_final_picks,
             "market_regime": regime,
             "market": "jp",
-            "llm_judgment_enabled": use_llm_judgment,
+            "llm_judgment_enabled": True,
         }
 
         # Finish batch
@@ -643,9 +643,8 @@ def main():
         logger.info("Japan Stock Daily Scoring completed successfully")
         logger.info(f"JP Conservative Picks (final): {v1_final_picks}")
         logger.info(f"JP Aggressive Picks (final): {v2_final_picks}")
-        if use_llm_judgment:
-            logger.info(f"  (Rule-based V1: {dual_result.v1_picks})")
-            logger.info(f"  (Rule-based V2: {dual_result.v2_picks})")
+        logger.info(f"  (Rule-based V1: {dual_result.v1_picks})")
+        logger.info(f"  (Rule-based V2: {dual_result.v2_picks})")
         logger.info("=" * 60)
 
     except Exception as e:

@@ -1093,7 +1093,7 @@ def main():
         "v1_picks": v1_final_picks,
         "v2_picks": v2_final_picks,
         "market_regime": market_regime.regime.value,
-        "llm_judgment_enabled": use_llm_judgment,
+        "llm_judgment_enabled": True,
     }
 
     # Finish batch logging
@@ -1136,7 +1136,7 @@ def main():
             "total_symbols": len(candidates),
             "successful_data_fetches": len(v1_stocks_data),
             "failed_data_fetches": len(failed_symbols),
-            "llm_judgment_enabled": use_llm_judgment,
+            "llm_judgment_enabled": True,
             "market_regime": market_regime.regime.value,
         }
     )
