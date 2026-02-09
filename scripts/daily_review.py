@@ -28,7 +28,13 @@ from src.data.yfinance_client import get_yfinance_client, YFinanceClient
 from src.data.supabase_client import SupabaseClient
 from src.judgment import JudgmentService
 from src.pipeline.market_config import US_MARKET
-from src.pipeline.review import adjust_thresholds_for_strategies, adjust_factor_weights, populate_judgment_outcomes
+from src.pipeline.review import (
+    adjust_thresholds_for_strategies,
+    adjust_factor_weights,
+    populate_judgment_outcomes,
+    get_unprocessed_outcome_dates,
+    check_batch_gap,
+)
 from src.portfolio import PortfolioManager
 from src.batch_logger import BatchLogger, BatchType
 
@@ -233,6 +239,28 @@ def main():
     # Initialize results in case of unexpected exceptions
     results_5d = {"error": "Not executed"}
     results_1d = {"error": "Not executed"}
+
+    # Step 0: Check for batch gaps and backfill missed outcomes
+    check_batch_gap(supabase, market_type="us")
+
+    try:
+        today_date = datetime.now(timezone.utc).date()
+
+        unprocessed_5d = get_unprocessed_outcome_dates(supabase, return_field="5d")
+        for missed_date in unprocessed_5d:
+            days_ago = (today_date - datetime.strptime(missed_date, "%Y-%m-%d").date()).days
+            logger.info(f"Backfilling 5d outcomes for {missed_date} (days_ago={days_ago})")
+            backfill_results = calculate_all_returns(finnhub, yf_client, supabase, days_ago=days_ago, return_field="5d")
+            populate_judgment_outcomes(supabase, backfill_results, return_field="5d")
+
+        unprocessed_1d = get_unprocessed_outcome_dates(supabase, return_field="1d", min_age_days=1)
+        for missed_date in unprocessed_1d:
+            days_ago = (today_date - datetime.strptime(missed_date, "%Y-%m-%d").date()).days
+            logger.info(f"Backfilling 1d outcomes for {missed_date} (days_ago={days_ago})")
+            backfill_results = calculate_all_returns(finnhub, yf_client, supabase, days_ago=days_ago, return_field="1d")
+            populate_judgment_outcomes(supabase, backfill_results, return_field="1d")
+    except Exception as e:
+        logger.error(f"Outcome backfill failed (non-fatal): {e}")
 
     # 1. Calculate returns for ALL stocks (5-day review)
     logger.info("Step 1: Calculating 5-day returns for ALL scored stocks...")

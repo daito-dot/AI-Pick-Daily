@@ -919,53 +919,30 @@ class PortfolioManager:
             else:
                 positions_value += pos.position_value  # Use entry value as fallback
 
-        # Get previous snapshot for cumulative calculations
+        # Get previous snapshot for cumulative tracking (non-cash fields only)
         prev_snapshot = self.supabase.get_latest_portfolio_snapshot(strategy_mode)
 
         if prev_snapshot:
             prev_total = float(prev_snapshot.get("total_value", INITIAL_CAPITAL))
             prev_cumulative_pnl = float(prev_snapshot.get("cumulative_pnl", 0))
             prev_sp500_cumulative = float(prev_snapshot.get("sp500_cumulative_pct", 0))
-
-            # Calculate cash balance properly:
-            # Cash changes when:
-            # - Positions are opened: cash decreases by position entry value
-            # - Positions are closed: cash increases by position exit value
-            #
-            # Formula: Cash = Previous Cash - New Opens + Closes
-            prev_cash = float(prev_snapshot.get("cash_balance", INITIAL_CAPITAL))
-
-            if prev_snapshot.get("snapshot_date") == today:
-                # Same day update: add back closed trades (may have been processed)
-                closed_trades_today = self._get_closed_trades_value(strategy_mode, today)
-                # Get positions opened after last snapshot (new positions)
-                new_positions_cost = self._get_positions_opened_after(
-                    strategy_mode,
-                    prev_snapshot.get("created_at"),
-                )
-                cash_balance = prev_cash - new_positions_cost + closed_trades_today
-            else:
-                # New day: previous cash - new positions opened today + closed today
-                new_positions_cost = self._get_positions_opened_on(strategy_mode, today)
-                closed_trades_today = self._get_closed_trades_value(strategy_mode, today)
-                cash_balance = prev_cash - new_positions_cost + closed_trades_today
         else:
             prev_total = INITIAL_CAPITAL
             prev_cumulative_pnl = 0
             prev_sp500_cumulative = 0
-            # First snapshot: calculate cash as what's left after positions
-            cash_balance = INITIAL_CAPITAL - self._get_invested_cost(strategy_mode)
 
-        # CRITICAL FIX: When all positions are closed, recalculate cash from first principles
-        # This prevents cash balance corruption from accumulating errors
-        if len(positions) == 0:
-            # Cash = Initial Capital + Total Realized PnL
-            total_realized_pnl = self._get_total_realized_pnl(strategy_mode)
-            cash_balance = INITIAL_CAPITAL + total_realized_pnl
-            logger.info(
-                f"[{strategy_mode}] No open positions - recalculated cash from realized PnL: "
-                f"¥{INITIAL_CAPITAL:,.0f} + ¥{total_realized_pnl:,.0f} = ¥{cash_balance:,.0f}"
-            )
+        # Cash balance from first principles (gap-resilient).
+        # This formula is correct regardless of how many days were skipped,
+        # because it depends only on current DB state, not previous snapshots.
+        # cash = INITIAL_CAPITAL + total_realized_pnl - invested_cost
+        total_realized_pnl = self._get_total_realized_pnl(strategy_mode)
+        invested_cost = self._get_invested_cost(strategy_mode)
+        cash_balance = INITIAL_CAPITAL + total_realized_pnl - invested_cost
+        logger.info(
+            f"[{strategy_mode}] Cash (first principles): "
+            f"¥{INITIAL_CAPITAL:,.0f} + ¥{total_realized_pnl:,.0f} - ¥{invested_cost:,.0f} "
+            f"= ¥{cash_balance:,.0f}"
+        )
 
         # Calculate total value
         total_value = cash_balance + positions_value

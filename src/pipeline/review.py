@@ -4,7 +4,7 @@ Extracts duplicated threshold adjustment logic from
 daily_review.py and daily_review_jp.py.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.scoring.threshold_optimizer import (
     calculate_optimal_threshold,
@@ -94,6 +94,107 @@ def populate_judgment_outcomes(
 
     logger.info(f"Saved {saved} judgment outcomes ({return_field}) for {check_date}")
     return saved
+
+
+def get_unprocessed_outcome_dates(
+    supabase,
+    return_field: str = "5d",
+    lookback_days: int = 14,
+    min_age_days: int = 5,
+) -> list[str]:
+    """Find batch_dates that have judgment_records but missing outcomes.
+
+    Searches for judgment records old enough to have measurable returns
+    but lacking the specified outcome field. Used to backfill missed
+    review runs.
+
+    Args:
+        supabase: Supabase client
+        return_field: "1d" or "5d"
+        lookback_days: How far back to search
+        min_age_days: Minimum age before expecting outcomes
+
+    Returns:
+        Sorted list of batch_date strings needing outcome processing
+    """
+    try:
+        today = datetime.now(timezone.utc).date()
+        cutoff_recent = (today - timedelta(days=min_age_days)).isoformat()
+        cutoff_old = (today - timedelta(days=lookback_days)).isoformat()
+
+        result = supabase._client.table("judgment_records").select(
+            "id, batch_date, judgment_outcomes(actual_return_1d, actual_return_5d)"
+        ).gte(
+            "batch_date", cutoff_old
+        ).lte(
+            "batch_date", cutoff_recent
+        ).execute()
+
+        rows = result.data or []
+        return_col = f"actual_return_{return_field}"
+
+        missing_dates = set()
+        for row in rows:
+            outcomes = row.get("judgment_outcomes", [])
+            if not outcomes or not any(
+                o.get(return_col) is not None for o in outcomes
+            ):
+                missing_dates.add(row["batch_date"])
+
+        result_dates = sorted(missing_dates)
+        if result_dates:
+            logger.info(
+                f"Found {len(result_dates)} unprocessed outcome dates "
+                f"({return_field}): {result_dates}"
+            )
+        return result_dates
+
+    except Exception as e:
+        logger.warning(f"Failed to query unprocessed outcome dates: {e}")
+        return []
+
+
+def check_batch_gap(supabase, market_type: str = "us") -> int | None:
+    """Check for gaps in batch execution and log warnings.
+
+    Args:
+        supabase: Supabase client
+        market_type: "us" or "jp"
+
+    Returns:
+        Number of days since last successful batch, or None if no history
+    """
+    try:
+        result = supabase._client.table("batch_execution_logs").select(
+            "started_at, status"
+        ).eq(
+            "market_type", market_type
+        ).in_(
+            "status", ["success", "partial_success"]
+        ).order(
+            "started_at", desc=True
+        ).limit(1).execute()
+
+        if not result.data:
+            return None
+
+        last_run = datetime.fromisoformat(
+            result.data[0]["started_at"].replace("Z", "+00:00")
+        ).date()
+        today = datetime.now(timezone.utc).date()
+        gap_days = (today - last_run).days
+
+        if gap_days > 1:
+            logger.warning(
+                f"BATCH GAP DETECTED ({market_type}): {gap_days} days since "
+                f"last successful run on {last_run}"
+            )
+
+        return gap_days
+
+    except Exception as e:
+        logger.warning(f"Failed to check batch gap: {e}")
+        return None
 
 
 def adjust_thresholds_for_strategies(
