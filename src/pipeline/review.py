@@ -159,7 +159,7 @@ def check_batch_gap(supabase, market_type: str = "us") -> int | None:
 
     Args:
         supabase: Supabase client
-        market_type: "us" or "jp"
+        market_type: "us" or "jp" (used in log messages only)
 
     Returns:
         Number of days since last successful batch, or None if no history
@@ -168,7 +168,7 @@ def check_batch_gap(supabase, market_type: str = "us") -> int | None:
         result = supabase._client.table("batch_execution_logs").select(
             "started_at, status"
         ).eq(
-            "market_type", market_type
+            "batch_type", "evening_review"
         ).in_(
             "status", ["success", "partial_success"]
         ).order(
