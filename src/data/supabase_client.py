@@ -7,11 +7,14 @@ Handles all database operations:
 - Market regime history
 - Performance tracking
 """
+import logging
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any
 
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 from src.config import config
 from src.scoring.market_regime import MarketRegime
