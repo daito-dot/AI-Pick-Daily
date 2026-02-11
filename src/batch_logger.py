@@ -59,6 +59,8 @@ class BatchExecutionContext:
     failed_items: int = 0
     errors: list[dict] = field(default_factory=list)
     model_used: str | None = None
+    analysis_model: str | None = None
+    reflection_model: str | None = None
     metadata: dict = field(default_factory=dict)
 
     def record_success(self, item_id: str | None = None) -> None:
@@ -278,7 +280,7 @@ class BatchLogger:
             ).execute()
 
             # Now insert the new record
-            supabase.table("batch_execution_logs").insert({
+            record = {
                 "id": ctx.id,
                 "batch_date": ctx.batch_date,
                 "batch_type": ctx.batch_type.value,
@@ -286,7 +288,12 @@ class BatchLogger:
                 "started_at": datetime.utcnow().isoformat(),
                 "model_used": ctx.model_used,
                 "metadata": ctx.metadata,
-            }).execute()
+            }
+            if ctx.analysis_model:
+                record["analysis_model"] = ctx.analysis_model
+            if ctx.reflection_model:
+                record["reflection_model"] = ctx.reflection_model
+            supabase.table("batch_execution_logs").insert(record).execute()
         except Exception as e:
             logger.error(f"Failed to insert batch log: {e}")
 
@@ -310,6 +317,10 @@ class BatchLogger:
                 "model_used": ctx.model_used,
                 "metadata": ctx.metadata,
             }
+            if ctx.analysis_model:
+                update_data["analysis_model"] = ctx.analysis_model
+            if ctx.reflection_model:
+                update_data["reflection_model"] = ctx.reflection_model
 
             if error_message:
                 update_data["error_message"] = error_message

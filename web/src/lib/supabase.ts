@@ -77,7 +77,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
   conservativeScores: StockScore[];
   aggressiveScores: StockScore[];
   regime: MarketRegimeHistory | null;
-  debugError?: string;
+  hasError?: boolean;
 }> {
   try {
     const supabase = getSupabase();
@@ -124,7 +124,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
         conservativeScores: [],
         aggressiveScores: [],
         regime: null,
-        debugError: `daily_picks: ${picksError.message}`,
+        hasError: true,
       };
     }
 
@@ -147,7 +147,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
         conservativeScores: [],
         aggressiveScores: [],
         regime: null,
-        debugError: `stock_scores: ${scoresError.message}`,
+        hasError: true,
       };
     }
 
@@ -172,7 +172,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
       conservativeScores,
       aggressiveScores,
       regime: regime || null,
-      debugError: undefined,
+      hasError: false,
     };
   } catch (error) {
     console.error('getTodayPicks error:', error);
@@ -182,7 +182,7 @@ export async function getTodayPicks(marketType: MarketType = 'us'): Promise<{
       conservativeScores: [],
       aggressiveScores: [],
       regime: null,
-      debugError: `Exception: ${error instanceof Error ? error.message : String(error)}`,
+      hasError: true,
     };
   }
 }

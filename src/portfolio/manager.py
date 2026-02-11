@@ -954,7 +954,7 @@ class PortfolioManager:
 
         # Calculate cumulative P&L
         cumulative_pnl = total_value - INITIAL_CAPITAL
-        cumulative_pnl_pct = (cumulative_pnl / INITIAL_CAPITAL) * 100
+        cumulative_pnl_pct = (cumulative_pnl / INITIAL_CAPITAL) * 100 if INITIAL_CAPITAL > 0 else 0.0
 
         # Calculate S&P 500 cumulative (compound) and alpha
         # Use multiplicative compounding to match portfolio's natural compounding

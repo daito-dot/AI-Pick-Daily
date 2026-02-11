@@ -5,8 +5,15 @@ from src.pipeline.scoring import (
     load_factor_weights,
     run_llm_judgment_phase,
     open_positions_and_snapshot,
+    save_scoring_results,
 )
-from src.pipeline.review import adjust_thresholds_for_strategies, populate_judgment_outcomes
+from src.pipeline.review import (
+    adjust_thresholds_for_strategies,
+    populate_judgment_outcomes,
+    get_current_price,
+    calculate_all_returns,
+    log_return_summary,
+)
 
 __all__ = [
     "MarketConfig",
@@ -16,6 +23,10 @@ __all__ = [
     "load_factor_weights",
     "run_llm_judgment_phase",
     "open_positions_and_snapshot",
+    "save_scoring_results",
     "adjust_thresholds_for_strategies",
     "populate_judgment_outcomes",
+    "get_current_price",
+    "calculate_all_returns",
+    "log_return_summary",
 ]

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from src.config import config
 from src.batch_logger import BatchLogger, BatchType
+from src.data.supabase_client import StockScore, DailyPick
 from src.judgment import (
     JudgmentService,
     PortfolioHolding,
@@ -646,3 +647,150 @@ def _run_shadow_risk_assessments(
 
     logger.info(f"Shadow risk assessments complete: {len(results)}/{len(shadow_models)} succeeded")
     return results
+
+
+def save_scoring_results(
+    supabase,
+    batch_date: str,
+    market_regime_str: str,
+    dual_result,
+    v1_stocks_data: list,
+    v1_final_picks: list[str],
+    v2_final_picks: list[str],
+    market_config: MarketConfig,
+) -> list[str]:
+    """Save V1/V2 stock scores and daily picks to the database.
+
+    Shared between US and JP markets. Uses StockScore/DailyPick dataclasses
+    so all saves go through the SupabaseClient data layer consistently.
+
+    Args:
+        supabase: SupabaseClient instance
+        batch_date: Batch date string (YYYY-MM-DD)
+        market_regime_str: Current market regime string
+        dual_result: DualScoringResult with v1_scores and v2_scores
+        v1_stocks_data: V1 stock data (for price lookup)
+        v1_final_picks: Final V1 pick symbols (after LLM judgment)
+        v2_final_picks: Final V2 pick symbols (after LLM judgment)
+        market_config: Market configuration
+
+    Returns:
+        List of error messages (empty if all succeeded)
+    """
+    save_errors: list[str] = []
+    market_type = market_config.market_type if market_config.market_type != "us" else None
+
+    def get_price(symbol: str) -> float:
+        return next(
+            (d.open_price for d in v1_stocks_data if d.symbol == symbol),
+            0.0,
+        )
+
+    # Save V1 stock scores
+    try:
+        v1_stock_scores = [
+            StockScore(
+                batch_date=batch_date,
+                symbol=s.symbol,
+                strategy_mode=market_config.v1_strategy_mode,
+                trend_score=s.trend_score,
+                momentum_score=s.momentum_score,
+                value_score=s.value_score,
+                sentiment_score=s.sentiment_score,
+                composite_score=s.composite_score,
+                percentile_rank=s.percentile_rank,
+                reasoning=s.reasoning,
+                price_at_time=get_price(s.symbol),
+                market_regime_at_time=market_regime_str,
+                momentum_12_1_score=s.momentum_12_1_score,
+                breakout_score=s.breakout_score,
+                catalyst_score=s.catalyst_score,
+                risk_adjusted_score=s.risk_adjusted_score,
+                cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
+                market_type=market_type,
+            )
+            for s in dual_result.v1_scores
+        ]
+        supabase.save_stock_scores(v1_stock_scores)
+        logger.info(f"Saved {len(v1_stock_scores)} V1 ({market_config.v1_strategy_mode}) stock scores")
+    except Exception as e:
+        error_msg = f"Failed to save V1 stock scores: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    # Save V2 stock scores
+    try:
+        v2_stock_scores = [
+            StockScore(
+                batch_date=batch_date,
+                symbol=s.symbol,
+                strategy_mode=market_config.v2_strategy_mode,
+                trend_score=s.trend_score,
+                momentum_score=s.momentum_score,
+                value_score=s.value_score,
+                sentiment_score=s.sentiment_score,
+                composite_score=s.composite_score,
+                percentile_rank=s.percentile_rank,
+                reasoning=s.reasoning,
+                price_at_time=get_price(s.symbol),
+                market_regime_at_time=market_regime_str,
+                momentum_12_1_score=s.momentum_12_1_score,
+                breakout_score=s.breakout_score,
+                catalyst_score=s.catalyst_score,
+                risk_adjusted_score=s.risk_adjusted_score,
+                cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
+                market_type=market_type,
+            )
+            for s in dual_result.v2_scores
+        ]
+        supabase.save_stock_scores(v2_stock_scores)
+        logger.info(f"Saved {len(v2_stock_scores)} V2 ({market_config.v2_strategy_mode}) stock scores")
+    except Exception as e:
+        error_msg = f"Failed to save V2 stock scores: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    # Save daily picks
+    try:
+        v1_pick = DailyPick(
+            batch_date=batch_date,
+            symbols=v1_final_picks,
+            pick_count=len(v1_final_picks),
+            market_regime=market_regime_str,
+            strategy_mode=market_config.v1_strategy_mode,
+            status="published",
+            market_type=market_type,
+        )
+        v2_pick = DailyPick(
+            batch_date=batch_date,
+            symbols=v2_final_picks,
+            pick_count=len(v2_final_picks),
+            market_regime=market_regime_str,
+            strategy_mode=market_config.v2_strategy_mode,
+            status="published",
+            market_type=market_type,
+        )
+
+        saved_picks, pick_errors = supabase.save_daily_picks_batch(
+            [v1_pick, v2_pick],
+            delete_existing=True,
+        )
+
+        if pick_errors:
+            for err in pick_errors:
+                logger.error(err)
+                save_errors.append(err)
+        else:
+            logger.info(f"Saved daily picks: V1={len(v1_final_picks)}, V2={len(v2_final_picks)}")
+
+    except Exception as e:
+        error_msg = f"Failed to save daily picks: {e}"
+        logger.error(error_msg)
+        save_errors.append(error_msg)
+
+    if save_errors:
+        logger.error(f"Save operation completed with {len(save_errors)} error(s)")
+    else:
+        logger.info(f"Final Picks: V1={v1_final_picks}, V2={v2_final_picks}")
+
+    return save_errors

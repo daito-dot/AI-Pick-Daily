@@ -55,6 +55,7 @@ class Diagnosis:
     recommended_actions: list[dict] = field(default_factory=list)
     confidence: float = 0.0
     raw_response: str = ""
+    model_version: str = ""
 
 
 @dataclass

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
 from src.data.yfinance_client import get_yfinance_client, YFinanceClient
-from src.data.supabase_client import SupabaseClient, MarketRegimeRecord, StockScore, DailyPick
+from src.data.supabase_client import SupabaseClient, MarketRegimeRecord, DailyPick
 from src.scoring.market_regime import decide_market_regime, calculate_sma, calculate_volatility
 from src.scoring.agents import StockData
 from src.scoring.agents_v2 import V2StockData
@@ -249,149 +249,6 @@ def fetch_stock_data_jp(
         return None, None
 
 
-def save_results_jp(
-    supabase: SupabaseClient,
-    batch_date: str,
-    market_regime: str,
-    dual_result,  # DualScoringResult
-    v1_stocks_data: list[StockData],
-    v1_final_picks: list[str],
-    v2_final_picks: list[str],
-) -> list[str]:
-    """Save scoring results to Supabase with market_type='jp'.
-
-    Note: Market regime is saved before this function is called.
-    Uses final picks (after LLM judgment) for daily_picks table.
-    Follows same pattern as US version but adds market_type='jp'.
-
-    Returns:
-        List of error messages (empty if all succeeded)
-    """
-    save_errors = []
-
-    # Helper to get price for a symbol
-    def get_price(symbol: str) -> float:
-        return next(
-            (d.open_price for d in v1_stocks_data if d.symbol == symbol),
-            0.0,
-        )
-
-    # Save V1 (jp_conservative) stock scores
-    try:
-        v1_score_data = [
-            {
-                "batch_date": batch_date,
-                "symbol": s.symbol,
-                "strategy_mode": "jp_conservative",
-                "trend_score": int(s.trend_score),
-                "momentum_score": int(s.momentum_score),
-                "value_score": int(s.value_score),
-                "sentiment_score": int(s.sentiment_score),
-                "composite_score": int(s.composite_score),
-                "percentile_rank": int(s.percentile_rank),
-                "reasoning": s.reasoning,
-                "price_at_time": float(get_price(s.symbol)),
-                "market_regime_at_time": market_regime,
-                "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
-                "breakout_score": int(s.breakout_score) if s.breakout_score else None,
-                "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
-                "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
-                "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
-                "market_type": "jp",
-            }
-            for s in dual_result.v1_scores
-        ]
-        supabase._client.table("stock_scores").upsert(
-            v1_score_data,
-            on_conflict="batch_date,symbol,strategy_mode",
-        ).execute()
-        logger.info(f"Saved {len(v1_score_data)} V1 (jp_conservative) stock scores")
-    except Exception as e:
-        error_msg = f"Failed to save V1 (jp_conservative) stock scores: {e}"
-        logger.error(error_msg)
-        save_errors.append(error_msg)
-
-    # Save V2 (jp_aggressive) stock scores
-    try:
-        v2_score_data = [
-            {
-                "batch_date": batch_date,
-                "symbol": s.symbol,
-                "strategy_mode": "jp_aggressive",
-                "trend_score": int(s.trend_score),
-                "momentum_score": int(s.momentum_score),
-                "value_score": int(s.value_score),
-                "sentiment_score": int(s.sentiment_score),
-                "composite_score": int(s.composite_score),
-                "percentile_rank": int(s.percentile_rank),
-                "reasoning": s.reasoning,
-                "price_at_time": float(get_price(s.symbol)),
-                "market_regime_at_time": market_regime,
-                "momentum_12_1_score": int(s.momentum_12_1_score) if s.momentum_12_1_score else None,
-                "breakout_score": int(s.breakout_score) if s.breakout_score else None,
-                "catalyst_score": int(s.catalyst_score) if s.catalyst_score else None,
-                "risk_adjusted_score": int(s.risk_adjusted_score) if s.risk_adjusted_score else None,
-                "cutoff_timestamp": dual_result.cutoff_timestamp.isoformat(),
-                "market_type": "jp",
-            }
-            for s in dual_result.v2_scores
-        ]
-        supabase._client.table("stock_scores").upsert(
-            v2_score_data,
-            on_conflict="batch_date,symbol,strategy_mode",
-        ).execute()
-        logger.info(f"Saved {len(v2_score_data)} V2 (jp_aggressive) stock scores")
-    except Exception as e:
-        error_msg = f"Failed to save V2 (jp_aggressive) stock scores: {e}"
-        logger.error(error_msg)
-        save_errors.append(error_msg)
-
-    # Save daily picks with idempotency
-    # Delete existing records first, then insert (ensures clean slate for re-runs)
-    try:
-        # Delete existing JP picks for this date
-        supabase.delete_daily_picks_for_date(
-            batch_date,
-            strategy_modes=["jp_conservative", "jp_aggressive"],
-        )
-
-        # Save V1 daily picks (with market_type) - uses LLM-filtered final picks
-        supabase._client.table("daily_picks").upsert({
-            "batch_date": batch_date,
-            "strategy_mode": "jp_conservative",
-            "symbols": v1_final_picks,
-            "pick_count": len(v1_final_picks),
-            "market_regime": market_regime,
-            "status": "published",
-            "market_type": "jp",
-        }, on_conflict="batch_date,strategy_mode").execute()
-
-        # Save V2 daily picks (with market_type) - uses LLM-filtered final picks
-        supabase._client.table("daily_picks").upsert({
-            "batch_date": batch_date,
-            "strategy_mode": "jp_aggressive",
-            "symbols": v2_final_picks,
-            "pick_count": len(v2_final_picks),
-            "market_regime": market_regime,
-            "status": "published",
-            "market_type": "jp",
-        }, on_conflict="batch_date,strategy_mode").execute()
-
-        logger.info(f"Saved daily picks: V1={len(v1_final_picks)}, V2={len(v2_final_picks)}")
-
-    except Exception as e:
-        error_msg = f"Failed to save daily picks: {e}"
-        logger.error(error_msg)
-        save_errors.append(error_msg)
-
-    if save_errors:
-        logger.error(f"Save operation completed with {len(save_errors)} error(s)")
-    else:
-        logger.info(f"Saved: V1 scores={len(dual_result.v1_scores)}, V2 scores={len(dual_result.v2_scores)}")
-        logger.info(f"Final Picks: V1={v1_final_picks}, V2={v2_final_picks}")
-
-    return save_errors
-
 
 def main():
     """Main entry point for Japan stock scoring."""
@@ -411,6 +268,7 @@ def main():
 
     # Start batch logging (include model like US version)
     batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, model=config.llm.scoring_model)
+    batch_ctx.analysis_model = config.llm.analysis_model
 
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -453,24 +311,24 @@ def main():
         if market_regime.max_picks == 0:
             logger.warning("Market in CRISIS mode - no recommendations today")
             # Save empty picks for both JP strategies
-            supabase._client.table("daily_picks").upsert({
-                "batch_date": today,
-                "strategy_mode": "jp_conservative",
-                "symbols": [],
-                "pick_count": 0,
-                "market_regime": regime,
-                "status": "published",
-                "market_type": "jp",
-            }, on_conflict="batch_date,strategy_mode").execute()
-            supabase._client.table("daily_picks").upsert({
-                "batch_date": today,
-                "strategy_mode": "jp_aggressive",
-                "symbols": [],
-                "pick_count": 0,
-                "market_regime": regime,
-                "status": "published",
-                "market_type": "jp",
-            }, on_conflict="batch_date,strategy_mode").execute()
+            supabase.save_daily_picks(DailyPick(
+                batch_date=today,
+                symbols=[],
+                pick_count=0,
+                market_regime=regime,
+                strategy_mode="jp_conservative",
+                status="published",
+                market_type="jp",
+            ))
+            supabase.save_daily_picks(DailyPick(
+                batch_date=today,
+                symbols=[],
+                pick_count=0,
+                market_regime=regime,
+                strategy_mode="jp_aggressive",
+                status="published",
+                market_type="jp",
+            ))
             logger.info("Saved empty daily picks for JP strategies")
             batch_ctx.metadata = {"market_regime": "crisis", "reason": "VIX too high"}
             BatchLogger.finish(batch_ctx)
@@ -498,7 +356,7 @@ def main():
             batch_ctx.processed_items = i + 1
 
             # Rate limiting
-            time.sleep(0.3)
+            time.sleep(JP_MARKET.rate_limit_sleep)
 
         logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
         if failed_symbols:
@@ -509,9 +367,8 @@ def main():
             v2_data.vix_level = vix
 
         # Ensure minimum data
-        MIN_STOCKS_REQUIRED = 10
-        if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
-            error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)"
+        if len(v1_stocks_data) < JP_MARKET.min_stocks_required:
+            error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {JP_MARKET.min_stocks_required} required)"
             logger.error(f"FATAL: {error_msg}")
             batch_ctx.failed_items = len(failed_symbols)
             batch_ctx.successful_items = len(v1_stocks_data)
@@ -563,14 +420,17 @@ def main():
 
         # Step 5: Save results (uses final picks after LLM judgment)
         logger.info("Step 5: Saving results...")
-        save_errors = save_results_jp(
+        from src.pipeline.scoring import save_scoring_results
+
+        save_errors = save_scoring_results(
             supabase=supabase,
             batch_date=today,
-            market_regime=regime,
+            market_regime_str=regime,
             dual_result=dual_result,
             v1_stocks_data=v1_stocks_data,
             v1_final_picks=v1_final_picks,
             v2_final_picks=v2_final_picks,
+            market_config=JP_MARKET,
         )
 
         # Track save errors in batch metadata

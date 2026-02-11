@@ -5,7 +5,7 @@ import { MarketRegimeStatus } from '@/components/MarketRegimeStatus';
 import { QuickPortfolioSummary, TodaysPicks, ActivePositions } from '@/components/dashboard';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
-import type { PortfolioSummaryWithRisk } from '@/types';
+import type { PortfolioSummaryWithRisk, StrategyModeType } from '@/types';
 
 export const revalidate = 300;
 
@@ -16,8 +16,8 @@ interface DashboardContentProps {
   v2Summary: PortfolioSummaryWithRisk;
   openPositions: any[];
   isJapan: boolean;
-  conservativeStrategy: string;
-  aggressiveStrategy: string;
+  conservativeStrategy: StrategyModeType;
+  aggressiveStrategy: StrategyModeType;
 }
 
 function DashboardContent({
@@ -70,8 +70,8 @@ function DashboardContent({
           aggressiveScores={picksData.aggressiveScores}
           judgments={judgments}
           isJapan={isJapan}
-          conservativeStrategy={conservativeStrategy as any}
-          aggressiveStrategy={aggressiveStrategy as any}
+          conservativeStrategy={conservativeStrategy}
+          aggressiveStrategy={aggressiveStrategy}
         />
       )}
 

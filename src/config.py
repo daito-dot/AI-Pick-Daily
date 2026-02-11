@@ -110,9 +110,13 @@ def load_config() -> Config:
     """Load configuration from environment variables."""
     strategy_mode = os.getenv("STRATEGY_MODE", "both")
     if strategy_mode not in ("conservative", "aggressive", "both"):
+        import logging
+        logging.getLogger(__name__).warning(
+            f"Invalid STRATEGY_MODE '{strategy_mode}', defaulting to 'both'"
+        )
         strategy_mode = "both"
 
-    return Config(
+    cfg = Config(
         llm=LLMConfig(
             provider=os.getenv("LLM_PROVIDER", "gemini"),  # type: ignore
             scoring_model=os.getenv("SCORING_MODEL", DEFAULT_SCORING_MODEL),
@@ -145,6 +149,23 @@ def load_config() -> Config:
         ),
         debug=os.getenv("DEBUG", "false").lower() == "true",
     )
+    _validate_config(cfg)
+    return cfg
+
+
+def _validate_config(cfg: Config) -> None:
+    """Log warnings for missing or suspicious config values."""
+    import logging
+    log = logging.getLogger(__name__)
+
+    if cfg.llm.provider == "gemini" and not cfg.llm.gemini_api_key:
+        log.warning("LLM_PROVIDER=gemini but GEMINI_API_KEY is not set")
+    if cfg.llm.provider == "claude" and not cfg.llm.anthropic_api_key:
+        log.warning("LLM_PROVIDER=claude but ANTHROPIC_API_KEY is not set")
+    if not cfg.supabase.url:
+        log.warning("SUPABASE_URL is not set — database operations will fail")
+    if not cfg.supabase.service_role_key and not cfg.supabase.anon_key:
+        log.warning("No Supabase key set — database auth will fail")
 
 
 # Global config instance

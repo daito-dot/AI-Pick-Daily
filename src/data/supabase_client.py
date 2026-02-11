@@ -26,6 +26,7 @@ class DailyPick:
     market_regime: str
     strategy_mode: str = "conservative"  # 'conservative' or 'aggressive'
     status: str = "generated"
+    market_type: str | None = None  # 'us' or 'jp' (None for legacy US records)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class StockScore:
     risk_adjusted_score: int | None = None
     earnings_date: str | None = None
     cutoff_timestamp: str | None = None
+    market_type: str | None = None  # 'us' or 'jp' (None for legacy US records)
 
 
 @dataclass
@@ -96,6 +98,8 @@ class SupabaseClient:
             "strategy_mode": picks.strategy_mode,
             "status": picks.status,
         }
+        if picks.market_type:
+            data["market_type"] = picks.market_type
 
         result = self._client.table("daily_picks").upsert(
             data,
@@ -203,6 +207,7 @@ class SupabaseClient:
                     # Log deletion for debugging (caller should log via BatchLogger)
                     pass
             except Exception as e:
+                logger.warning(f"Failed to delete existing picks for {batch_date}: {e}")
                 errors.append(f"Failed to delete existing picks: {str(e)}")
                 # Continue with upsert anyway - it will overwrite
 
@@ -212,6 +217,7 @@ class SupabaseClient:
                 result = self.save_daily_picks(pick)
                 saved_records.append(result)
             except Exception as e:
+                logger.warning(f"Failed to save {pick.strategy_mode} picks: {e}")
                 errors.append(
                     f"Failed to save {pick.strategy_mode} picks: {str(e)}"
                 )
@@ -230,8 +236,9 @@ class SupabaseClient:
         Returns:
             Inserted records
         """
-        data = [
-            {
+        data = []
+        for s in scores:
+            record = {
                 "batch_date": s.batch_date,
                 "symbol": s.symbol,
                 "strategy_mode": s.strategy_mode,
@@ -252,8 +259,9 @@ class SupabaseClient:
                 "earnings_date": s.earnings_date,
                 "cutoff_timestamp": s.cutoff_timestamp,
             }
-            for s in scores
-        ]
+            if s.market_type:
+                record["market_type"] = s.market_type
+            data.append(record)
 
         result = self._client.table("stock_scores").upsert(
             data,
@@ -632,8 +640,8 @@ class SupabaseClient:
                 "strategy_mode", strategy_mode
             ).single().execute()
             return result.data or {}
-        except Exception:
-            # No config found for this strategy_mode
+        except Exception as e:
+            logger.debug(f"No scoring_config for {strategy_mode}: {e}")
             return {}
 
     def get_all_scoring_configs(self) -> list[dict[str, Any]]:
@@ -1668,5 +1676,6 @@ class SupabaseClient:
                 .execute()
             )
             return result.data or []
-        except Exception:
+        except Exception as e:
+            logger.debug(f"No prompt overrides for {strategy_mode}: {e}")
             return []

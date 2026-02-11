@@ -193,6 +193,7 @@ def _save_research_to_db(report) -> None:
             },
             "symbols_mentioned": symbols[:20],
             "research_date": today,
+            "model_version": config.llm.deep_research_model,
         }).execute()
 
         logger.info(f"Saved weekly research to research_logs ({len(content)} chars, {len(symbols)} symbols)")

@@ -35,7 +35,6 @@ from src.data.symbol_loader import SymbolLoader, DEFAULT_US_SYMBOLS
 from src.data.supabase_client import (
     SupabaseClient,
     DailyPick,
-    StockScore,
     MarketRegimeRecord,
 )
 from src.scoring.market_regime import decide_market_regime, calculate_sma, calculate_volatility
@@ -677,6 +676,7 @@ def main():
 
     # Track batch execution
     batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, model=config.llm.scoring_model)
+    batch_ctx.analysis_model = config.llm.analysis_model
 
     # 1. Determine market regime
     logger.info("Step 1: Determining market regime...")
@@ -879,9 +879,8 @@ def main():
         logger.warning(f"Failed to fetch data for {len(failed_symbols)} symbols: {failed_symbols[:10]}...")
 
     # Ensure we have enough data to make recommendations
-    MIN_STOCKS_REQUIRED = 10
-    if len(v1_stocks_data) < MIN_STOCKS_REQUIRED:
-        error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {MIN_STOCKS_REQUIRED} required)"
+    if len(v1_stocks_data) < US_MARKET.min_stocks_required:
+        error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {US_MARKET.min_stocks_required} required)"
         logger.error(f"FATAL: {error_msg}")
         logger.error("Batch failed - insufficient data for reliable recommendations")
         batch_ctx.failed_items = len(failed_symbols)
@@ -940,119 +939,20 @@ def main():
 
     # 6. Save results for both strategies (with transaction-like error handling)
     logger.info("Step 6: Saving results...")
+    from src.pipeline.scoring import save_scoring_results
 
-    # Helper to get price for a symbol
-    def get_price(symbol: str) -> float:
-        return next(
-            (d.open_price for d in v1_stocks_data if d.symbol == symbol),
-            0.0,
-        )
+    save_errors = save_scoring_results(
+        supabase=supabase,
+        batch_date=today,
+        market_regime_str=market_regime.regime.value,
+        dual_result=dual_result,
+        v1_stocks_data=v1_stocks_data,
+        v1_final_picks=v1_final_picks,
+        v2_final_picks=v2_final_picks,
+        market_config=market_config,
+    )
 
-    save_errors = []
-
-    # Save V1 (Conservative) stock scores
-    try:
-        v1_stock_scores = [
-            StockScore(
-                batch_date=today,
-                symbol=s.symbol,
-                strategy_mode="conservative",
-                trend_score=s.trend_score,
-                momentum_score=s.momentum_score,
-                value_score=s.value_score,
-                sentiment_score=s.sentiment_score,
-                composite_score=s.composite_score,
-                percentile_rank=s.percentile_rank,
-                reasoning=s.reasoning,
-                price_at_time=get_price(s.symbol),
-                market_regime_at_time=market_regime.regime.value,
-                momentum_12_1_score=s.momentum_12_1_score,
-                breakout_score=s.breakout_score,
-                catalyst_score=s.catalyst_score,
-                risk_adjusted_score=s.risk_adjusted_score,
-                cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
-            )
-            for s in dual_result.v1_scores
-        ]
-        supabase.save_stock_scores(v1_stock_scores)
-        logger.info(f"Saved {len(v1_stock_scores)} V1 (conservative) stock scores")
-    except Exception as e:
-        error_msg = f"Failed to save V1 stock scores: {e}"
-        logger.error(error_msg)
-        save_errors.append(error_msg)
-
-    # Save V2 (Aggressive) stock scores
-    try:
-        v2_stock_scores = [
-            StockScore(
-                batch_date=today,
-                symbol=s.symbol,
-                strategy_mode="aggressive",
-                trend_score=s.trend_score,
-                momentum_score=s.momentum_score,
-                value_score=s.value_score,
-                sentiment_score=s.sentiment_score,
-                composite_score=s.composite_score,
-                percentile_rank=s.percentile_rank,
-                reasoning=s.reasoning,
-                price_at_time=get_price(s.symbol),
-                market_regime_at_time=market_regime.regime.value,
-                momentum_12_1_score=s.momentum_12_1_score,
-                breakout_score=s.breakout_score,
-                catalyst_score=s.catalyst_score,
-                risk_adjusted_score=s.risk_adjusted_score,
-                cutoff_timestamp=dual_result.cutoff_timestamp.isoformat(),
-            )
-            for s in dual_result.v2_scores
-        ]
-        supabase.save_stock_scores(v2_stock_scores)
-        logger.info(f"Saved {len(v2_stock_scores)} V2 (aggressive) stock scores")
-    except Exception as e:
-        error_msg = f"Failed to save V2 stock scores: {e}"
-        logger.error(error_msg)
-        save_errors.append(error_msg)
-
-    # Save daily picks with idempotency (batch save with existing record cleanup)
-    # This ensures re-runs on the same day don't create duplicate records
-    try:
-        v1_pick = DailyPick(
-            batch_date=today,
-            symbols=v1_final_picks,
-            pick_count=len(v1_final_picks),
-            market_regime=market_regime.regime.value,
-            strategy_mode="conservative",
-            status="published",
-        )
-        v2_pick = DailyPick(
-            batch_date=today,
-            symbols=v2_final_picks,
-            pick_count=len(v2_final_picks),
-            market_regime=market_regime.regime.value,
-            strategy_mode="aggressive",
-            status="published",
-        )
-
-        # Use batch save for atomic-like behavior
-        saved_picks, pick_errors = supabase.save_daily_picks_batch(
-            [v1_pick, v2_pick],
-            delete_existing=True,  # Idempotency: clean up before save
-        )
-
-        if pick_errors:
-            for err in pick_errors:
-                logger.error(err)
-                save_errors.append(err)
-        else:
-            logger.info(f"Saved daily picks: V1={len(v1_final_picks)}, V2={len(v2_final_picks)}")
-
-    except Exception as e:
-        error_msg = f"Failed to save daily picks: {e}"
-        logger.error(error_msg)
-        save_errors.append(error_msg)
-
-    # Check if any save operations failed
     if save_errors:
-        logger.error(f"Save operation completed with {len(save_errors)} error(s)")
         batch_ctx.metadata = batch_ctx.metadata or {}
         batch_ctx.metadata["save_errors"] = save_errors
 

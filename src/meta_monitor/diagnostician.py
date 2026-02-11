@@ -66,9 +66,11 @@ def diagnose(
         )
 
         result = _parse_diagnosis_response(response.content)
+        result.model_version = response.model
         logger.info(
             f"Diagnosis for {strategy_mode}: {len(result.root_causes)} causes, "
-            f"{len(result.recommended_actions)} actions, confidence={result.confidence:.2f}"
+            f"{len(result.recommended_actions)} actions, confidence={result.confidence:.2f}, "
+            f"model={result.model_version}"
         )
         return result
 

@@ -1,11 +1,16 @@
 """Shared review pipeline functions for US and JP markets.
 
-Extracts duplicated threshold adjustment logic from
-daily_review.py and daily_review_jp.py.
+Extracts duplicated logic from daily_review.py and daily_review_jp.py:
+- get_current_price: market-aware price fetching
+- calculate_all_returns: return calculation for scored stocks
+- Threshold/weight adjustment (feedback loops)
 """
 import logging
+import time
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
+from src.pipeline.market_config import MarketConfig
 from src.scoring.threshold_optimizer import (
     calculate_optimal_threshold,
     should_apply_adjustment,
@@ -14,6 +19,220 @@ from src.scoring.threshold_optimizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Type alias for price fetching functions
+PriceFetcher = Callable[[str], float | None]
+
+
+def get_current_price(
+    symbol: str,
+    market_config: MarketConfig,
+    finnhub=None,
+    yf_client=None,
+) -> float | None:
+    """Get current price for a symbol using market-appropriate data sources.
+
+    For US market: tries Finnhub first, falls back to yfinance.
+    For JP market: uses yfinance only.
+
+    Args:
+        symbol: Stock symbol
+        market_config: Market configuration
+        finnhub: Finnhub client (optional, used for US)
+        yf_client: yfinance client
+
+    Returns:
+        Current price or None if unavailable
+    """
+    if market_config.use_finnhub and finnhub:
+        try:
+            quote = finnhub.get_quote(symbol)
+            if quote.current_price and quote.current_price > 0:
+                return quote.current_price
+        except Exception as e:
+            logger.debug(f"{symbol}: Finnhub quote failed: {e}")
+
+    if yf_client:
+        try:
+            yf_quote = yf_client.get_quote(symbol)
+            if yf_quote and yf_quote.current_price > 0:
+                return yf_quote.current_price
+        except Exception as e:
+            logger.debug(f"{symbol}: yfinance quote failed: {e}")
+
+    return None
+
+
+def calculate_all_returns(
+    price_fetcher: PriceFetcher,
+    supabase,
+    market_config: MarketConfig,
+    days_ago: int = 5,
+    return_field: str = "5d",
+) -> dict:
+    """Calculate returns for ALL scored stocks from N days ago.
+
+    Shared between US and JP markets. Uses a price_fetcher callable
+    to abstract away market-specific price fetching.
+
+    Args:
+        price_fetcher: Callable that takes a symbol and returns price or None
+        supabase: Supabase client
+        market_config: Market configuration (provides strategies and rate_limit)
+        days_ago: Number of days to look back
+        return_field: Which return field to update ("1d" or "5d")
+
+    Returns:
+        Dict with results summary
+    """
+    strategies = market_config.strategies
+    check_date = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    logger.info(f"Calculating {return_field} returns for {market_config.market_type.upper()} stocks from {check_date}")
+
+    # Get ALL scores from that date
+    all_scores = _get_scores_for_date(supabase, check_date, strategies)
+    if not all_scores:
+        logger.info(f"No scores found for {check_date}")
+        return {"error": "No scores found", "date": check_date}
+
+    logger.info(f"Found {len(all_scores)} stock scores to review")
+
+    # Get the picks for that date to mark was_picked
+    picks_data = _get_picks_for_date(supabase, check_date, strategies)
+    logger.info(f"Picks by strategy: {', '.join(f'{k}: {v}' for k, v in picks_data.items())}")
+
+    # Calculate returns for each stock
+    updates = []
+    results = {
+        "date": check_date,
+        "days_ago": days_ago,
+        "total_stocks": len(all_scores),
+        "successful": 0,
+        "failed": 0,
+        "picked_returns": [],
+        "not_picked_returns": [],
+        "missed_opportunities": [],
+    }
+
+    for score in all_scores:
+        symbol = score["symbol"]
+        strategy = score["strategy_mode"]
+        original_price = score.get("price_at_time", 0)
+        composite_score = score.get("composite_score", 0)
+
+        if original_price <= 0:
+            logger.warning(f"{symbol}: No original price, skipping")
+            results["failed"] += 1
+            continue
+
+        current_price = price_fetcher(symbol)
+        if not current_price:
+            logger.warning(f"{symbol}: Could not get current price")
+            results["failed"] += 1
+            continue
+
+        return_pct = ((current_price - original_price) / original_price) * 100
+        was_picked = symbol in picks_data.get(strategy, set())
+
+        update_entry = {
+            "batch_date": check_date,
+            "symbol": symbol,
+            "strategy_mode": strategy,
+            "was_picked": was_picked,
+        }
+        if return_field == "1d":
+            update_entry["return_1d"] = return_pct
+            update_entry["price_1d"] = current_price
+        else:
+            update_entry["return_5d"] = return_pct
+            update_entry["price_5d"] = current_price
+        updates.append(update_entry)
+
+        result_entry = {
+            "symbol": symbol,
+            "strategy": strategy,
+            "score": composite_score,
+            "return_pct": round(return_pct, 2),
+            "original_price": original_price,
+            "current_price": current_price,
+        }
+
+        if was_picked:
+            results["picked_returns"].append(result_entry)
+            logger.info(f"[PICKED] {symbol} ({strategy}): {original_price} -> {current_price} ({return_pct:+.1f}%)")
+        else:
+            results["not_picked_returns"].append(result_entry)
+            if return_pct >= 3.0:
+                results["missed_opportunities"].append(result_entry)
+                logger.warning(f"[MISSED] {symbol} ({strategy}): Score={composite_score}, Return={return_pct:+.1f}%")
+            else:
+                logger.debug(f"[NOT PICKED] {symbol} ({strategy}): {return_pct:+.1f}%")
+
+        results["successful"] += 1
+        time.sleep(market_config.rate_limit_sleep)
+
+    if updates:
+        updated = supabase.bulk_update_returns(updates)
+        logger.info(f"Updated {updated} stock scores with return data")
+
+    return results
+
+
+def _get_scores_for_date(supabase, check_date: str, strategies: list[str]) -> list[dict]:
+    """Get all scores for a date across the given strategy modes."""
+    all_scores = []
+    for strategy in strategies:
+        try:
+            result = supabase._client.table("stock_scores").select("*").eq(
+                "batch_date", check_date
+            ).eq(
+                "strategy_mode", strategy
+            ).execute()
+            if result.data:
+                all_scores.extend(result.data)
+        except Exception as e:
+            logger.error(f"Failed to fetch scores for {strategy}: {e}")
+    return all_scores
+
+
+def _get_picks_for_date(supabase, check_date: str, strategies: list[str]) -> dict[str, set]:
+    """Get picked symbols for each strategy on a date."""
+    picks_data: dict[str, set] = {}
+    for strategy in strategies:
+        picks_result = supabase._client.table("daily_picks").select("symbols").eq(
+            "batch_date", check_date
+        ).eq(
+            "strategy_mode", strategy
+        ).execute()
+        if picks_result.data:
+            picks_data[strategy] = set(picks_result.data[0].get("symbols", []))
+        else:
+            picks_data[strategy] = set()
+    return picks_data
+
+
+def log_return_summary(results: dict, label: str = "5-day") -> None:
+    """Log a summary of return calculation results."""
+    if results.get("error"):
+        logger.warning(f"No data for {label} review: {results}")
+        return
+
+    picked = results.get("picked_returns", [])
+    not_picked = results.get("not_picked_returns", [])
+    missed = results.get("missed_opportunities", [])
+
+    logger.info(f"{label} results summary:")
+    logger.info(f"  - Total reviewed: {results['successful']}")
+    logger.info(f"  - Picked stocks: {len(picked)}")
+    logger.info(f"  - Not picked: {len(not_picked)}")
+    logger.info(f"  - MISSED OPPORTUNITIES: {len(missed)}")
+
+    if missed:
+        logger.warning("=" * 40)
+        logger.warning("MISSED OPPORTUNITIES DETECTED!")
+        for m in missed[:5]:
+            logger.warning(f"  {m['symbol']}: Score={m['score']}, +{m['return_pct']:.1f}%")
+        logger.warning("=" * 40)
 
 
 def populate_judgment_outcomes(

@@ -11,6 +11,7 @@ from typing import Any
 
 from src.llm import get_llm_client, LLMClient
 from src.config import config
+from src.pipeline.market_config import US_MARKET, JP_MARKET
 from .models import (
     JudgmentOutput, ReasoningTrace, KeyFactor,
     PortfolioJudgmentOutput, StockAllocation,
@@ -255,11 +256,12 @@ class JudgmentService:
         """Create a fallback judgment when LLM fails."""
         composite_score = rule_based_scores.get("composite_score", 50)
 
-        # Determine decision based on rule-based score
-        if strategy_mode == "conservative":
-            threshold = 60
+        # Determine decision based on rule-based score using MarketConfig defaults
+        market = JP_MARKET if strategy_mode.startswith("jp_") else US_MARKET
+        if strategy_mode in (market.v1_strategy_mode,):
+            threshold = market.default_v1_threshold
         else:
-            threshold = 75
+            threshold = market.default_v2_threshold
 
         if composite_score >= threshold:
             decision = "buy"

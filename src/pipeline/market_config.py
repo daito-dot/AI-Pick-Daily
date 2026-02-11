@@ -24,6 +24,16 @@ class MarketConfig:
     benchmark_symbol: str
     use_finnhub: bool
     transaction_costs: TransactionCostConfig = TransactionCostConfig(0.0, 0.0, 0.0)
+    min_stocks_required: int = 10
+    initial_capital: float = 100000.0
+    rate_limit_sleep: float = 0.3
+    default_v1_threshold: int = 60
+    default_v2_threshold: int = 75
+
+    @property
+    def strategies(self) -> list[str]:
+        """Return both strategy modes as a list."""
+        return [self.v1_strategy_mode, self.v2_strategy_mode]
 
 
 US_MARKET = MarketConfig(
@@ -37,6 +47,7 @@ US_MARKET = MarketConfig(
         slippage_rate=0.0002,
         min_commission=0.0,
     ),
+    rate_limit_sleep=0.2,
 )
 
 JP_MARKET = MarketConfig(

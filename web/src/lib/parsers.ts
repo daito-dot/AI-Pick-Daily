@@ -8,6 +8,9 @@ export function safeParseJson<T>(value: T | string | null | undefined, fallback:
   if (value === null || value === undefined) return fallback;
   if (typeof value !== 'string') return value;
 
+  // Try parsing up to 2 times because Supabase JSONB columns sometimes
+  // arrive as double-encoded strings (e.g. '"{\"key\":\"val\"}"') when
+  // the Python backend stores pre-serialized JSON via supabase-py.
   let result: any = value;
   for (let i = 0; i < 2; i++) {
     if (typeof result !== 'string') break;
