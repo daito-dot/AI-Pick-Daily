@@ -11,7 +11,7 @@ from typing import Any
 
 from src.llm import get_llm_client, LLMClient
 from src.config import config
-from src.pipeline.market_config import US_MARKET, JP_MARKET
+# US_MARKET, JP_MARKET imported lazily in _create_fallback_judgment to avoid circular import
 from .models import (
     JudgmentOutput, ReasoningTrace, KeyFactor,
     PortfolioJudgmentOutput, StockAllocation,
@@ -257,6 +257,7 @@ class JudgmentService:
         composite_score = rule_based_scores.get("composite_score", 50)
 
         # Determine decision based on rule-based score using MarketConfig defaults
+        from src.pipeline.market_config import US_MARKET, JP_MARKET
         market = JP_MARKET if strategy_mode.startswith("jp_") else US_MARKET
         if strategy_mode in (market.v1_strategy_mode,):
             threshold = market.default_v1_threshold
@@ -267,7 +268,7 @@ class JudgmentService:
             decision = "buy"
             confidence = 0.4  # Lower confidence due to fallback
         else:
-            decision = "skip"
+            decision = "hold"
             confidence = 0.3
 
         return JudgmentOutput(

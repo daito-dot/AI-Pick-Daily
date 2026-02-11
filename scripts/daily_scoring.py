@@ -678,368 +678,374 @@ def main():
     batch_ctx = BatchLogger.start(BatchType.MORNING_SCORING, model=config.llm.scoring_model)
     batch_ctx.analysis_model = config.llm.analysis_model
 
-    # 1. Determine market regime
-    logger.info("Step 1: Determining market regime...")
     try:
-        regime_data = fetch_market_regime_data(finnhub, yf_client)
-    except DataFetchError as e:
-        logger.error(
-            "Cannot fetch market regime data - batch failed",
-            extra={
-                "event": "batch_error",
-                "error_type": "DataFetchError",
-                "error_message": str(e),
-                "step": "market_regime",
-            }
-        )
-        BatchLogger.finish(batch_ctx, error=str(e))
-        sys.exit(1)
-
-    market_regime = decide_market_regime(
-        vix=regime_data["vix"],
-        sp500_price_today=regime_data["sp500_price"],
-        sp500_sma20=regime_data["sp500_sma20"],
-        volatility_5d_avg=regime_data["volatility_5d"],
-        volatility_30d_avg=regime_data["volatility_30d"],
-    )
-
-    logger.info(
-        "Market regime determined",
-        extra={
-            "event": "market_regime",
-            "regime": market_regime.regime.value,
-            "max_picks": market_regime.max_picks,
-            "vix_level": market_regime.vix_level,
-            "sp500_deviation_pct": market_regime.sp500_deviation_pct,
-            "notes": market_regime.notes,
-        }
-    )
-
-    # Save market regime
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    supabase.save_market_regime(MarketRegimeRecord(
-        check_date=today,
-        vix_level=market_regime.vix_level,
-        market_regime=market_regime.regime.value,
-        sp500_sma20_deviation_pct=market_regime.sp500_deviation_pct,
-        volatility_cluster_flag=market_regime.volatility_cluster,
-        notes=market_regime.notes,
-    ))
-
-    # Check if we should skip (crisis mode)
-    if market_regime.max_picks == 0:
-        logger.warning(
-            "Market in CRISIS mode - no recommendations today",
-            extra={"event": "crisis_mode", "vix_level": market_regime.vix_level}
-        )
-        # Save empty picks for both strategies
-        supabase.save_daily_picks(DailyPick(
-            batch_date=today,
-            symbols=[],
-            pick_count=0,
-            market_regime=market_regime.regime.value,
-            strategy_mode="conservative",
-            status="published",
-        ))
-        supabase.save_daily_picks(DailyPick(
-            batch_date=today,
-            symbols=[],
-            pick_count=0,
-            market_regime=market_regime.regime.value,
-            strategy_mode="aggressive",
-            status="published",
-        ))
-        logger.info("Saved empty daily picks for both strategies")
-        batch_ctx.metadata = {"market_regime": "crisis", "reason": "VIX too high"}
-        BatchLogger.finish(batch_ctx)
-        return
-
-    # 2. Load symbols and filter candidates
-    logger.info("Step 2: Loading symbols and filtering candidates...")
-
-    # Initialize SymbolLoader with Supabase client for DB support
-    symbol_loader = SymbolLoader(supabase_client=supabase)
-
-    # Determine market to process
-    market_filter = None if args.market == "all" else args.market
-
-    # Load symbols from specified source
-    try:
-        candidates = symbol_loader.get_symbols(
-            market=market_filter,
-            source=args.symbols_source,
-        )
-        logger.info(
-            f"Loaded {len(candidates)} symbols from {symbol_loader.loaded_from}",
-            extra={
-                "event": "symbols_loaded",
-                "source": symbol_loader.loaded_from,
-                "market": args.market,
-                "count": len(candidates),
-            }
-        )
-    except Exception as e:
-        logger.warning(f"Symbol loading failed ({e}), falling back to defaults")
-        candidates = SP500_TOP_SYMBOLS.copy()
-
-    # Filter out stocks with upcoming earnings
-    candidates = filter_earnings(finnhub, candidates)
-    logger.info(f"Candidates after filtering: {len(candidates)}")
-
-    # 3. Fetch stock data (with checkpoint support or async mode)
-    logger.info("Step 3: Fetching stock data...")
-
-    v1_stocks_data = []
-    v2_stocks_data = []
-    failed_symbols = []
-
-    # Use async mode if requested (faster, no checkpoint support)
-    if args.use_async:
-        logger.info(f"Using ASYNC mode with {args.async_concurrency} concurrent connections")
-        if args.resume:
-            logger.warning("--resume is ignored in async mode (checkpoint not supported)")
-
+        # 1. Determine market regime
+        logger.info("Step 1: Determining market regime...")
         try:
-            v1_stocks_data, v2_stocks_data, failed_symbols = fetch_stocks_async_mode(
-                candidates=candidates,
-                vix_level=regime_data["vix"],
-                concurrency=args.async_concurrency,
+            regime_data = fetch_market_regime_data(finnhub, yf_client)
+        except DataFetchError as e:
+            logger.error(
+                "Cannot fetch market regime data - batch failed",
+                extra={
+                    "event": "batch_error",
+                    "error_type": "DataFetchError",
+                    "error_message": str(e),
+                    "step": "market_regime",
+                }
+            )
+            BatchLogger.finish(batch_ctx, error=str(e))
+            sys.exit(1)
+
+        market_regime = decide_market_regime(
+            vix=regime_data["vix"],
+            sp500_price_today=regime_data["sp500_price"],
+            sp500_sma20=regime_data["sp500_sma20"],
+            volatility_5d_avg=regime_data["volatility_5d"],
+            volatility_30d_avg=regime_data["volatility_30d"],
+        )
+
+        logger.info(
+            "Market regime determined",
+            extra={
+                "event": "market_regime",
+                "regime": market_regime.regime.value,
+                "max_picks": market_regime.max_picks,
+                "vix_level": market_regime.vix_level,
+                "sp500_deviation_pct": market_regime.sp500_deviation_pct,
+                "notes": market_regime.notes,
+            }
+        )
+
+        # Save market regime
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        supabase.save_market_regime(MarketRegimeRecord(
+            check_date=today,
+            vix_level=market_regime.vix_level,
+            market_regime=market_regime.regime.value,
+            sp500_sma20_deviation_pct=market_regime.sp500_deviation_pct,
+            volatility_cluster_flag=market_regime.volatility_cluster,
+            notes=market_regime.notes,
+        ))
+
+        # Check if we should skip (crisis mode)
+        if market_regime.max_picks == 0:
+            logger.warning(
+                "Market in CRISIS mode - no recommendations today",
+                extra={"event": "crisis_mode", "vix_level": market_regime.vix_level}
+            )
+            # Save empty picks for both strategies
+            supabase.save_daily_picks(DailyPick(
+                batch_date=today,
+                symbols=[],
+                pick_count=0,
+                market_regime=market_regime.regime.value,
+                strategy_mode="conservative",
+                status="published",
+            ))
+            supabase.save_daily_picks(DailyPick(
+                batch_date=today,
+                symbols=[],
+                pick_count=0,
+                market_regime=market_regime.regime.value,
+                strategy_mode="aggressive",
+                status="published",
+            ))
+            logger.info("Saved empty daily picks for both strategies")
+            batch_ctx.metadata = {"market_regime": "crisis", "reason": "VIX too high"}
+            BatchLogger.finish(batch_ctx)
+            return
+
+        # 2. Load symbols and filter candidates
+        logger.info("Step 2: Loading symbols and filtering candidates...")
+
+        # Initialize SymbolLoader with Supabase client for DB support
+        symbol_loader = SymbolLoader(supabase_client=supabase)
+
+        # Determine market to process
+        market_filter = None if args.market == "all" else args.market
+
+        # Load symbols from specified source
+        try:
+            candidates = symbol_loader.get_symbols(
+                market=market_filter,
+                source=args.symbols_source,
+            )
+            logger.info(
+                f"Loaded {len(candidates)} symbols from {symbol_loader.loaded_from}",
+                extra={
+                    "event": "symbols_loaded",
+                    "source": symbol_loader.loaded_from,
+                    "market": args.market,
+                    "count": len(candidates),
+                }
             )
         except Exception as e:
-            logger.error(f"Async fetch failed: {e}, falling back to sync mode")
-            args.use_async = False  # Fall through to sync mode
+            logger.warning(f"Symbol loading failed ({e}), falling back to defaults")
+            candidates = SP500_TOP_SYMBOLS.copy()
 
-    # Use sync mode (with checkpoint support)
-    if not args.use_async:
-        logger.info("Using SYNC mode with checkpoint support")
+        # Filter out stocks with upcoming earnings
+        candidates = filter_earnings(finnhub, candidates)
+        logger.info(f"Candidates after filtering: {len(candidates)}")
 
-        # Initialize checkpoint
-        checkpoint: BatchCheckpoint | None = None
-        if args.resume:
-            checkpoint = load_checkpoint(today)
-            if checkpoint:
-                logger.info(
-                    f"Resuming from checkpoint: {len(checkpoint.processed_symbols)} "
-                    f"symbols already processed (last updated: {checkpoint.last_updated})"
+        # 3. Fetch stock data (with checkpoint support or async mode)
+        logger.info("Step 3: Fetching stock data...")
+
+        v1_stocks_data = []
+        v2_stocks_data = []
+        failed_symbols = []
+
+        # Use async mode if requested (faster, no checkpoint support)
+        if args.use_async:
+            logger.info(f"Using ASYNC mode with {args.async_concurrency} concurrent connections")
+            if args.resume:
+                logger.warning("--resume is ignored in async mode (checkpoint not supported)")
+
+            try:
+                v1_stocks_data, v2_stocks_data, failed_symbols = fetch_stocks_async_mode(
+                    candidates=candidates,
+                    vix_level=regime_data["vix"],
+                    concurrency=args.async_concurrency,
                 )
-            else:
-                logger.info("No checkpoint found, starting fresh")
+            except Exception as e:
+                logger.error(f"Async fetch failed: {e}, falling back to sync mode")
+                args.use_async = False  # Fall through to sync mode
 
-        # Create new checkpoint if needed
-        if checkpoint is None:
-            checkpoint = BatchCheckpoint(batch_date=today)
+        # Use sync mode (with checkpoint support)
+        if not args.use_async:
+            logger.info("Using SYNC mode with checkpoint support")
 
-        restored_count = 0
+            # Initialize checkpoint
+            checkpoint: BatchCheckpoint | None = None
+            if args.resume:
+                checkpoint = load_checkpoint(today)
+                if checkpoint:
+                    logger.info(
+                        f"Resuming from checkpoint: {len(checkpoint.processed_symbols)} "
+                        f"symbols already processed (last updated: {checkpoint.last_updated})"
+                    )
+                else:
+                    logger.info("No checkpoint found, starting fresh")
 
-        # First, restore data from checkpoint for already processed symbols
-        if args.resume and checkpoint.v1_stock_data:
-            for symbol in checkpoint.processed_symbols:
-                if symbol in checkpoint.v1_stock_data and symbol in checkpoint.v2_stock_data:
-                    try:
-                        v1_data = dict_to_stock_data(checkpoint.v1_stock_data[symbol])
-                        v2_data = dict_to_v2_stock_data(checkpoint.v2_stock_data[symbol])
-                        v1_stocks_data.append(v1_data)
-                        v2_stocks_data.append(v2_data)
-                        restored_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to restore {symbol} from checkpoint: {e}")
-                elif symbol in checkpoint.failed_symbols:
-                    # Symbol was already marked as failed, skip it
+            # Create new checkpoint if needed
+            if checkpoint is None:
+                checkpoint = BatchCheckpoint(batch_date=today)
+
+            restored_count = 0
+
+            # First, restore data from checkpoint for already processed symbols
+            if args.resume and checkpoint.v1_stock_data:
+                for symbol in checkpoint.processed_symbols:
+                    if symbol in checkpoint.v1_stock_data and symbol in checkpoint.v2_stock_data:
+                        try:
+                            v1_data = dict_to_stock_data(checkpoint.v1_stock_data[symbol])
+                            v2_data = dict_to_v2_stock_data(checkpoint.v2_stock_data[symbol])
+                            v1_stocks_data.append(v1_data)
+                            v2_stocks_data.append(v2_data)
+                            restored_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to restore {symbol} from checkpoint: {e}")
+                    elif symbol in checkpoint.failed_symbols:
+                        # Symbol was already marked as failed, skip it
+                        failed_symbols.append(symbol)
+
+                if restored_count > 0:
+                    logger.info(f"Restored {restored_count} symbols from checkpoint")
+
+            for symbol in candidates:
+                # Skip already processed symbols (in resume mode)
+                if symbol in checkpoint.processed_symbols:
+                    continue
+
+                result = fetch_stock_data(finnhub, yf_client, symbol, regime_data["vix"])
+                if result:
+                    v1_data, v2_data = result
+                    v1_stocks_data.append(v1_data)
+                    v2_stocks_data.append(v2_data)
+                    # Store in checkpoint
+                    checkpoint.v1_stock_data[symbol] = stock_data_to_dict(v1_data)
+                    checkpoint.v2_stock_data[symbol] = v2_stock_data_to_dict(v2_data)
+                else:
                     failed_symbols.append(symbol)
+                    checkpoint.failed_symbols.append(symbol)
 
-            if restored_count > 0:
-                logger.info(f"Restored {restored_count} symbols from checkpoint")
+                # Update checkpoint after each symbol
+                checkpoint.processed_symbols.append(symbol)
+                save_checkpoint(checkpoint)
 
-        for symbol in candidates:
-            # Skip already processed symbols (in resume mode)
-            if symbol in checkpoint.processed_symbols:
-                continue
+                # Small delay to avoid rate limiting
+                time.sleep(0.5)
 
-            result = fetch_stock_data(finnhub, yf_client, symbol, regime_data["vix"])
-            if result:
-                v1_data, v2_data = result
-                v1_stocks_data.append(v1_data)
-                v2_stocks_data.append(v2_data)
-                # Store in checkpoint
-                checkpoint.v1_stock_data[symbol] = stock_data_to_dict(v1_data)
-                checkpoint.v2_stock_data[symbol] = v2_stock_data_to_dict(v2_data)
-            else:
-                failed_symbols.append(symbol)
-                checkpoint.failed_symbols.append(symbol)
+        logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
+        if failed_symbols:
+            logger.warning(f"Failed to fetch data for {len(failed_symbols)} symbols: {failed_symbols[:10]}...")
 
-            # Update checkpoint after each symbol
-            checkpoint.processed_symbols.append(symbol)
-            save_checkpoint(checkpoint)
+        # Ensure we have enough data to make recommendations
+        if len(v1_stocks_data) < US_MARKET.min_stocks_required:
+            error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {US_MARKET.min_stocks_required} required)"
+            logger.error(f"FATAL: {error_msg}")
+            logger.error("Batch failed - insufficient data for reliable recommendations")
+            batch_ctx.failed_items = len(failed_symbols)
+            batch_ctx.successful_items = len(v1_stocks_data)
+            BatchLogger.finish(batch_ctx, error=error_msg)
+            sys.exit(1)
 
-            # Small delay to avoid rate limiting
-            time.sleep(0.5)
+        # 4. Fetch dynamic thresholds and factor weights from database (FEEDBACK LOOP)
+        logger.info("Step 4: Fetching dynamic thresholds and factor weights from scoring_config...")
+        v1_threshold, v2_threshold = load_dynamic_thresholds(supabase, US_MARKET)
+        v1_factor_weights, v2_factor_weights = load_factor_weights(supabase, US_MARKET)
 
-    logger.info(f"Successfully fetched data for {len(v1_stocks_data)} stocks")
-    if failed_symbols:
-        logger.warning(f"Failed to fetch data for {len(failed_symbols)} symbols: {failed_symbols[:10]}...")
-
-    # Ensure we have enough data to make recommendations
-    if len(v1_stocks_data) < US_MARKET.min_stocks_required:
-        error_msg = f"Only {len(v1_stocks_data)} stocks with data (minimum {US_MARKET.min_stocks_required} required)"
-        logger.error(f"FATAL: {error_msg}")
-        logger.error("Batch failed - insufficient data for reliable recommendations")
-        batch_ctx.failed_items = len(failed_symbols)
-        batch_ctx.successful_items = len(v1_stocks_data)
-        BatchLogger.finish(batch_ctx, error=error_msg)
-        sys.exit(1)
-
-    # 4. Fetch dynamic thresholds and factor weights from database (FEEDBACK LOOP)
-    logger.info("Step 4: Fetching dynamic thresholds and factor weights from scoring_config...")
-    v1_threshold, v2_threshold = load_dynamic_thresholds(supabase, US_MARKET)
-    v1_factor_weights, v2_factor_weights = load_factor_weights(supabase, US_MARKET)
-
-    # 5. Run dual scoring (V1 Conservative + V2 Aggressive)
-    logger.info("Step 5: Running dual scoring pipeline...")
-    dual_result = run_dual_scoring(
-        v1_stocks_data,
-        v2_stocks_data,
-        market_regime,
-        v1_threshold=v1_threshold,
-        v2_threshold=v2_threshold,
-        v1_factor_weights=v1_factor_weights,
-        v2_factor_weights=v2_factor_weights,
-    )
-
-    logger.info(
-        "Dual scoring completed",
-        extra={
-            "event": "scoring_complete",
-            "v1_scored_count": len(dual_result.v1_scores),
-            "v1_rule_picks": dual_result.v1_picks,
-            "v2_scored_count": len(dual_result.v2_scores),
-            "v2_rule_picks": dual_result.v2_picks,
-        }
-    )
-
-    # 5.5. Run LLM Judgment for top candidates (Layer 2 - Portfolio Level)
-    logger.info("Step 5.5: Running portfolio-level LLM judgment...")
-    portfolio = PortfolioManager(supabase=supabase, finnhub=finnhub, yfinance=yf_client, market_config=US_MARKET)
-
-    v1_final_picks, v2_final_picks, judgment_stats = run_llm_judgment_phase(
-        dual_result=dual_result,
-        v1_stocks_data=v1_stocks_data,
-        v2_stocks_data=v2_stocks_data,
-        v1_threshold=v1_threshold,
-        v2_threshold=v2_threshold,
-        market_regime_str=market_regime.regime.value,
-        market_config=US_MARKET,
-        today=today,
-        max_picks=market_regime.max_picks,
-        finnhub=finnhub,
-        supabase=supabase,
-        portfolio=portfolio,
-    )
-    total_successful_judgments = judgment_stats.successful_judgments
-    total_failed_judgments = judgment_stats.failed_judgments
-
-    # 6. Save results for both strategies (with transaction-like error handling)
-    logger.info("Step 6: Saving results...")
-    from src.pipeline.scoring import save_scoring_results
-
-    save_errors = save_scoring_results(
-        supabase=supabase,
-        batch_date=today,
-        market_regime_str=market_regime.regime.value,
-        dual_result=dual_result,
-        v1_stocks_data=v1_stocks_data,
-        v1_final_picks=v1_final_picks,
-        v2_final_picks=v2_final_picks,
-        market_config=market_config,
-    )
-
-    if save_errors:
-        batch_ctx.metadata = batch_ctx.metadata or {}
-        batch_ctx.metadata["save_errors"] = save_errors
-
-    # 7. PAPER TRADING: Open positions and update snapshots
-    logger.info("Step 7: Opening positions for paper trading...")
-
-    # Get S&P 500 daily return for benchmark
-    sp500_daily_pct = None
-    try:
-        sp500_candles = finnhub.get_stock_candles(
-            "SPY",
-            resolution="D",
-            from_timestamp=int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp()),
+        # 5. Run dual scoring (V1 Conservative + V2 Aggressive)
+        logger.info("Step 5: Running dual scoring pipeline...")
+        dual_result = run_dual_scoring(
+            v1_stocks_data,
+            v2_stocks_data,
+            market_regime,
+            v1_threshold=v1_threshold,
+            v2_threshold=v2_threshold,
+            v1_factor_weights=v1_factor_weights,
+            v2_factor_weights=v2_factor_weights,
         )
-        if sp500_candles and len(sp500_candles.get("close", [])) >= 2:
-            closes = sp500_candles["close"]
-            sp500_daily_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
-            logger.info(f"S&P 500 daily return: {sp500_daily_pct:.2f}%")
-    except Exception as e:
-        logger.warning(f"Failed to get S&P 500 daily return: {e}")
 
-    open_positions_and_snapshot(
-        portfolio=portfolio,
-        dual_result=dual_result,
-        v1_stocks_data=v1_stocks_data,
-        v1_final_picks=v1_final_picks,
-        v2_final_picks=v2_final_picks,
-        market_config=US_MARKET,
-        max_picks=market_regime.max_picks,
-        benchmark_daily_pct=sp500_daily_pct,
-    )
+        logger.info(
+            "Dual scoring completed",
+            extra={
+                "event": "scoring_complete",
+                "v1_scored_count": len(dual_result.v1_scores),
+                "v1_rule_picks": dual_result.v1_picks,
+                "v2_scored_count": len(dual_result.v2_scores),
+                "v2_rule_picks": dual_result.v2_picks,
+            }
+        )
 
-    # Record batch completion stats
-    batch_ctx.successful_items = len(v1_stocks_data)
-    batch_ctx.failed_items = len(failed_symbols)
-    batch_ctx.total_items = len(candidates)
-    batch_ctx.metadata = {
-        "v1_picks": v1_final_picks,
-        "v2_picks": v2_final_picks,
-        "market_regime": market_regime.regime.value,
-        "llm_judgment_enabled": True,
-    }
+        # 5.5. Run LLM Judgment for top candidates (Layer 2 - Portfolio Level)
+        logger.info("Step 5.5: Running portfolio-level LLM judgment...")
+        portfolio = PortfolioManager(supabase=supabase, finnhub=finnhub, yfinance=yf_client, market_config=US_MARKET)
 
-    # Finish batch logging
-    BatchLogger.finish(batch_ctx)
+        v1_final_picks, v2_final_picks, judgment_stats = run_llm_judgment_phase(
+            dual_result=dual_result,
+            v1_stocks_data=v1_stocks_data,
+            v2_stocks_data=v2_stocks_data,
+            v1_threshold=v1_threshold,
+            v2_threshold=v2_threshold,
+            market_regime_str=market_regime.regime.value,
+            market_config=US_MARKET,
+            today=today,
+            max_picks=market_regime.max_picks,
+            finnhub=finnhub,
+            supabase=supabase,
+            portfolio=portfolio,
+        )
+        total_successful_judgments = judgment_stats.successful_judgments
+        total_failed_judgments = judgment_stats.failed_judgments
 
-    # Clear checkpoint on successful completion
-    clear_checkpoint(today)
+        # 6. Save results for both strategies (with transaction-like error handling)
+        logger.info("Step 6: Saving results...")
+        from src.pipeline.scoring import save_scoring_results
 
-    # Record batch metrics for monitoring
-    batch_end_time = datetime.now(timezone.utc)
-    batch_metrics = BatchMetrics(
-        batch_id=batch_id,
-        start_time=batch_start_time,
-        end_time=batch_end_time,
-        total_symbols=len(candidates),
-        successful_judgments=total_successful_judgments,
-        failed_judgments=total_failed_judgments,
-        v1_picks_count=len(v1_final_picks),
-        v2_picks_count=len(v2_final_picks),
-    )
-    record_batch_metrics(batch_metrics)
+        save_errors = save_scoring_results(
+            supabase=supabase,
+            batch_date=today,
+            market_regime_str=market_regime.regime.value,
+            dual_result=dual_result,
+            v1_stocks_data=v1_stocks_data,
+            v1_final_picks=v1_final_picks,
+            v2_final_picks=v2_final_picks,
+            market_config=US_MARKET,
+        )
 
-    # Check and send alerts if thresholds exceeded
-    alerts = check_and_alert(batch_metrics)
-    for alert_message in alerts:
-        send_alert(alert_message, AlertLevel.WARNING)
+        if save_errors:
+            batch_ctx.metadata = batch_ctx.metadata or {}
+            batch_ctx.metadata["save_errors"] = save_errors
 
-    # Calculate batch duration
-    batch_duration_seconds = (batch_end_time - batch_start_time).total_seconds()
+        # 7. PAPER TRADING: Open positions and update snapshots
+        logger.info("Step 7: Opening positions for paper trading...")
 
-    logger.info(
-        "Daily scoring batch completed successfully",
-        extra={
-            "event": "batch_complete",
-            "duration_seconds": batch_duration_seconds,
-            "v1_final_picks": v1_final_picks,
-            "v2_final_picks": v2_final_picks,
-            "v1_rule_picks": dual_result.v1_picks,
-            "v2_rule_picks": dual_result.v2_picks,
-            "total_symbols": len(candidates),
-            "successful_data_fetches": len(v1_stocks_data),
-            "failed_data_fetches": len(failed_symbols),
-            "llm_judgment_enabled": True,
+        # Get S&P 500 daily return for benchmark
+        sp500_daily_pct = None
+        try:
+            sp500_candles = finnhub.get_stock_candles(
+                "SPY",
+                resolution="D",
+                from_timestamp=int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp()),
+            )
+            if sp500_candles and len(sp500_candles.get("close", [])) >= 2:
+                closes = sp500_candles["close"]
+                sp500_daily_pct = ((closes[-1] - closes[-2]) / closes[-2]) * 100
+                logger.info(f"S&P 500 daily return: {sp500_daily_pct:.2f}%")
+        except Exception as e:
+            logger.warning(f"Failed to get S&P 500 daily return: {e}")
+
+        open_positions_and_snapshot(
+            portfolio=portfolio,
+            dual_result=dual_result,
+            v1_stocks_data=v1_stocks_data,
+            v1_final_picks=v1_final_picks,
+            v2_final_picks=v2_final_picks,
+            market_config=US_MARKET,
+            max_picks=market_regime.max_picks,
+            benchmark_daily_pct=sp500_daily_pct,
+        )
+
+        # Record batch completion stats
+        batch_ctx.successful_items = len(v1_stocks_data)
+        batch_ctx.failed_items = len(failed_symbols)
+        batch_ctx.total_items = len(candidates)
+        batch_ctx.metadata = {
+            "v1_picks": v1_final_picks,
+            "v2_picks": v2_final_picks,
             "market_regime": market_regime.regime.value,
+            "llm_judgment_enabled": True,
         }
-    )
+
+        # Finish batch logging
+        BatchLogger.finish(batch_ctx)
+
+        # Clear checkpoint on successful completion
+        clear_checkpoint(today)
+
+        # Record batch metrics for monitoring
+        batch_end_time = datetime.now(timezone.utc)
+        batch_metrics = BatchMetrics(
+            batch_id=batch_id,
+            start_time=batch_start_time,
+            end_time=batch_end_time,
+            total_symbols=len(candidates),
+            successful_judgments=total_successful_judgments,
+            failed_judgments=total_failed_judgments,
+            v1_picks_count=len(v1_final_picks),
+            v2_picks_count=len(v2_final_picks),
+        )
+        record_batch_metrics(batch_metrics)
+
+        # Check and send alerts if thresholds exceeded
+        alerts = check_and_alert(batch_metrics)
+        for alert_message in alerts:
+            send_alert(alert_message, AlertLevel.WARNING)
+
+        # Calculate batch duration
+        batch_duration_seconds = (batch_end_time - batch_start_time).total_seconds()
+
+        logger.info(
+            "Daily scoring batch completed successfully",
+            extra={
+                "event": "batch_complete",
+                "duration_seconds": batch_duration_seconds,
+                "v1_final_picks": v1_final_picks,
+                "v2_final_picks": v2_final_picks,
+                "v1_rule_picks": dual_result.v1_picks,
+                "v2_rule_picks": dual_result.v2_picks,
+                "total_symbols": len(candidates),
+                "successful_data_fetches": len(v1_stocks_data),
+                "failed_data_fetches": len(failed_symbols),
+                "llm_judgment_enabled": True,
+                "market_regime": market_regime.regime.value,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Batch failed: {e}")
+        BatchLogger.finish(batch_ctx, error=str(e))
+        raise
 
 
 if __name__ == "__main__":

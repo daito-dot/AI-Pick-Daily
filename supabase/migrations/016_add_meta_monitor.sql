@@ -51,17 +51,39 @@ ALTER TABLE performance_rolling_metrics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE meta_interventions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prompt_overrides ENABLE ROW LEVEL SECURITY;
 
--- RLS policies (service role bypass)
-CREATE POLICY "Allow service role full access on performance_rolling_metrics"
+-- RLS policies: read is public, write is service_role only
+
+-- performance_rolling_metrics
+CREATE POLICY "Anon read access on performance_rolling_metrics"
+  ON performance_rolling_metrics FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Service role write access on performance_rolling_metrics"
   ON performance_rolling_metrics FOR ALL
+  TO service_role
   USING (true) WITH CHECK (true);
 
-CREATE POLICY "Allow service role full access on meta_interventions"
+-- meta_interventions
+CREATE POLICY "Anon read access on meta_interventions"
+  ON meta_interventions FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Service role write access on meta_interventions"
   ON meta_interventions FOR ALL
+  TO service_role
   USING (true) WITH CHECK (true);
 
-CREATE POLICY "Allow service role full access on prompt_overrides"
+-- prompt_overrides
+CREATE POLICY "Anon read access on prompt_overrides"
+  ON prompt_overrides FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Service role write access on prompt_overrides"
   ON prompt_overrides FOR ALL
+  TO service_role
   USING (true) WITH CHECK (true);
 
 -- Index for common queries

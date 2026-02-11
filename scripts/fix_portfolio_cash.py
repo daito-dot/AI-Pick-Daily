@@ -23,7 +23,7 @@ def fix_portfolio_cash():
     supabase = SupabaseClient()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    for strategy in ["conservative", "aggressive"]:
+    for strategy in ["conservative", "aggressive", "jp_conservative", "jp_aggressive"]:
         print(f"\n=== Fixing {strategy} ===")
 
         # 1. Get all trade history
@@ -38,15 +38,16 @@ def fix_portfolio_cash():
             for t in trades
         )
 
+        currency = "¥" if "jp_" in strategy else "$"
         print(f"  Total trades: {len(trades)}")
-        print(f"  Total PnL: ¥{total_pnl:,.0f}")
-        print(f"  Total proceeds: ¥{total_proceeds:,.0f}")
+        print(f"  Total PnL: {currency}{total_pnl:,.0f}")
+        print(f"  Total proceeds: {currency}{total_proceeds:,.0f}")
 
         # 2. Check open positions
         positions = supabase.get_open_positions(strategy)
         positions_value = sum(float(p.get("position_value", 0)) for p in positions)
         print(f"  Open positions: {len(positions)}")
-        print(f"  Positions value: ¥{positions_value:,.0f}")
+        print(f"  Positions value: {currency}{positions_value:,.0f}")
 
         # 3. Calculate correct values
         # If no open positions: Cash = Initial + Total PnL
@@ -59,14 +60,14 @@ def fix_portfolio_cash():
             correct_cash = INITIAL_CAPITAL - invested + total_proceeds
             correct_total = correct_cash + positions_value
 
-        print(f"  Correct cash: ¥{correct_cash:,.0f}")
-        print(f"  Correct total: ¥{correct_total:,.0f}")
+        print(f"  Correct cash: {currency}{correct_cash:,.0f}")
+        print(f"  Correct total: {currency}{correct_total:,.0f}")
 
         # 4. Get current snapshot
         current = supabase.get_latest_portfolio_snapshot(strategy)
         if current:
-            print(f"  Current cash: ¥{current.get('cash_balance', 0):,.0f}")
-            print(f"  Current total: ¥{current.get('total_value', 0):,.0f}")
+            print(f"  Current cash: {currency}{current.get('cash_balance', 0):,.0f}")
+            print(f"  Current total: {currency}{current.get('total_value', 0):,.0f}")
 
         # 5. Update snapshot
         cumulative_pnl = correct_total - INITIAL_CAPITAL

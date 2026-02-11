@@ -176,9 +176,9 @@ def calculate_optimal_threshold(
     new_threshold = current_threshold + adjustment
 
     # Apply range limits based on strategy
-    if strategy_mode == "conservative":
+    if "conservative" in strategy_mode:
         min_t, max_t = 40, 80
-    else:  # aggressive
+    else:  # aggressive / jp_aggressive
         min_t, max_t = 50, 90
 
     min_t = max(min_t, min_threshold)

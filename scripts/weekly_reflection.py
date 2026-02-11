@@ -64,7 +64,7 @@ def main():
     successful_strategies = 0
     failed_strategies = 0
 
-    for strategy in ["conservative", "aggressive"]:
+    for strategy in ["conservative", "aggressive", "jp_conservative", "jp_aggressive"]:
         logger.info(f"\n{'='*30}")
         logger.info(f"Reflecting on {strategy} strategy...")
         logger.info(f"{'='*30}")
@@ -117,7 +117,7 @@ def main():
     logger.info("=" * 50)
 
     # Finish batch logging
-    batch_ctx.total_items = 2  # 2 strategies
+    batch_ctx.total_items = 4  # 4 strategies (US + JP)
     batch_ctx.successful_items = successful_strategies
     batch_ctx.failed_items = failed_strategies
     BatchLogger.finish(batch_ctx)

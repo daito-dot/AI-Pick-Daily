@@ -372,8 +372,8 @@ class TestServiceFallbacks:
         assert all(a.risk_score == 3 for a in result.assessments)
         assert "test error" in result.market_level_risks
 
-    def test_fallback_judgment_uses_skip(self):
-        """Fallback judgment should use 'skip' not 'avoid'."""
+    def test_fallback_judgment_uses_hold(self):
+        """Fallback judgment should use 'hold' for low-score symbols."""
         from src.judgment.service import JudgmentService
         from src.judgment.prompts import PROMPT_VERSION
 
@@ -385,4 +385,4 @@ class TestServiceFallbacks:
             market_regime="normal",
             error_message="test",
         )
-        assert result.decision == "skip"
+        assert result.decision == "hold"

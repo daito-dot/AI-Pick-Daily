@@ -274,7 +274,7 @@ def _format_rule_based_scores(scores: dict, strategy_mode: str) -> str:
 
     lines = []
 
-    if strategy_mode == "conservative":
+    if strategy_mode in ("conservative", "jp_conservative"):
         for name, weight in [("trend", 0.35), ("momentum", 0.35), ("value", 0.20), ("sentiment", 0.10)]:
             score = scores.get(f"{name}_score", 0)
             lines.append(f"{name.capitalize()}: {score}/100 (weight: {weight:.0%})")
@@ -1090,19 +1090,19 @@ def build_risk_assessment_prompt(
 ## 出力フォーマット (JSON) - 日本語で記述
 
 ```json
-{{{{
+{{
   "risk_assessments": [
-    {{{{
+    {{
       "symbol": "AAPL",
       "risk_score": 2,
       "negative_catalysts": [],
       "news_interpretation": "好材料 — 決算好調、アナリスト上方修正",
       "portfolio_concern": null
-    }}}}
+    }}
   ],
   "market_level_risks": "現時点でシステミックリスクなし",
   "sector_concentration_warning": null
-}}}}
+}}
 ```
 
 JSONオブジェクトのみを返してください。追加テキストは不要です。"""

@@ -9,7 +9,7 @@ Handles all database operations:
 """
 import logging
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from supabase import create_client, Client
@@ -356,7 +356,7 @@ class SupabaseClient:
         """
         result = self._client.table("performance_log").upsert(
             log,
-            on_conflict="pick_date,symbol",
+            on_conflict="pick_date,symbol,strategy_mode",
         ).execute()
 
         return result.data[0] if result.data else {}
@@ -404,7 +404,7 @@ class SupabaseClient:
             List of earnings records
         """
         today = date.today().isoformat()
-        end_date = (date.today().replace(day=date.today().day + within_days)).isoformat()
+        end_date = (date.today() + timedelta(days=within_days)).isoformat()
 
         result = self._client.table("stock_scores").select(
             "symbol, earnings_date"

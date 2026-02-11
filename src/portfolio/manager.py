@@ -458,6 +458,7 @@ class PortfolioManager:
         available_cash: float,
         num_picks: int,
         current_positions: int,
+        strategy_mode: str = "conservative",
     ) -> float:
         """
         Calculate position size for new picks.
@@ -469,8 +470,8 @@ class PortfolioManager:
         if num_picks == 0:
             return 0.0
 
-        # Calculate slots available (use first strategy's params as approximation)
-        slots_available = int(self._get_params("conservative").get(
+        # Calculate slots available
+        slots_available = int(self._get_params(strategy_mode).get(
             "max_positions", MAX_POSITIONS
         )) - current_positions
         if slots_available <= 0:
@@ -554,6 +555,7 @@ class PortfolioManager:
             available_cash,
             len(new_picks),
             len(current_positions),
+            strategy_mode=strategy_mode,
         )
 
         # Apply drawdown multiplier
@@ -804,7 +806,8 @@ class PortfolioManager:
                 threshold = thresholds.get(position.strategy_mode, 60)
                 if current_score is not None and current_score < threshold:
                     trigger = "score_drop"
-            elif position.hold_days >= int(p.get("max_hold_days", MAX_HOLD_DAYS)):
+
+            if trigger is None and position.hold_days >= int(p.get("max_hold_days", MAX_HOLD_DAYS)):
                 trigger = "max_hold"
 
             if trigger:

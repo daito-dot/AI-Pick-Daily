@@ -37,12 +37,28 @@ ALTER TABLE performance_rolling_metrics
 ALTER TABLE strategy_parameters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE parameter_change_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow service role full access on strategy_parameters"
+-- Read is public, write is service_role only
+
+-- strategy_parameters
+CREATE POLICY "Anon read access on strategy_parameters"
+  ON strategy_parameters FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Service role write access on strategy_parameters"
   ON strategy_parameters FOR ALL
+  TO service_role
   USING (true) WITH CHECK (true);
 
-CREATE POLICY "Allow service role full access on parameter_change_log"
+-- parameter_change_log
+CREATE POLICY "Anon read access on parameter_change_log"
+  ON parameter_change_log FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+CREATE POLICY "Service role write access on parameter_change_log"
   ON parameter_change_log FOR ALL
+  TO service_role
   USING (true) WITH CHECK (true);
 
 -- Indexes

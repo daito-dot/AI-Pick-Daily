@@ -302,8 +302,8 @@ def main():
             check_date=today,
             vix_level=vix,
             market_regime=regime,
-            sp500_sma20_deviation_pct=0,
-            volatility_cluster_flag=False,
+            sp500_sma20_deviation_pct=market_regime.sp500_deviation_pct,
+            volatility_cluster_flag=market_regime.volatility_cluster,
             notes=f"Japan stocks - VIX: {vix}",
         ))
 

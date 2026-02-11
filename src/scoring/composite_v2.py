@@ -46,7 +46,7 @@ def validate_score(score: int, name: str) -> int:
     return score
 
 
-StrategyType = Literal["conservative", "aggressive"]
+StrategyType = Literal["conservative", "aggressive", "jp_conservative", "jp_aggressive"]
 
 
 @dataclass

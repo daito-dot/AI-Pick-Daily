@@ -182,6 +182,7 @@ def _save_research_to_db(report) -> None:
                 "top_opportunities": sa.top_opportunities[:3] if sa.top_opportunities else [],
             }
 
+        # TODO: JP market weekly research not yet implemented
         supabase._client.table("research_logs").insert({
             "research_type": "market",
             "market_type": "us",

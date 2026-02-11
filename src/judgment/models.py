@@ -11,7 +11,7 @@ import json
 
 
 # Type aliases
-JudgmentDecision = Literal["buy", "skip"]
+JudgmentDecision = Literal["buy", "hold", "avoid"]
 AllocationHint = Literal["high", "normal", "low"]
 FactorType = Literal["fundamental", "technical", "sentiment", "macro", "catalyst"]
 FactorImpact = Literal["positive", "negative", "neutral"]
