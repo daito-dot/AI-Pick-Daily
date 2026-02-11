@@ -406,13 +406,13 @@ class InformationCollector:
         if technical:
             max_score += 0.5
             tech_points = 0
-            if technical.sma_20:
+            if technical.sma_20 is not None:
                 tech_points += 1
-            if technical.sma_50:
+            if technical.sma_50 is not None:
                 tech_points += 1
-            if technical.rsi_14:
+            if technical.rsi_14 is not None:
                 tech_points += 1
-            if technical.volume_ratio:
+            if technical.volume_ratio is not None:
                 tech_points += 1
             score += 0.5 * (tech_points / 4)
         else:
@@ -422,9 +422,9 @@ class InformationCollector:
         if fundamental:
             max_score += 0.5
             fund_points = 0
-            if fundamental.pe_ratio:
+            if fundamental.pe_ratio is not None:
                 fund_points += 1
-            if fundamental.pb_ratio:
+            if fundamental.pb_ratio is not None:
                 fund_points += 1
             if fundamental.dividend_yield is not None:
                 fund_points += 1

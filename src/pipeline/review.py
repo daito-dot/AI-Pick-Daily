@@ -101,6 +101,7 @@ def get_unprocessed_outcome_dates(
     return_field: str = "5d",
     lookback_days: int = 14,
     min_age_days: int = 5,
+    strategy_modes: list[str] | None = None,
 ) -> list[str]:
     """Find batch_dates that have judgment_records but missing outcomes.
 
@@ -113,6 +114,7 @@ def get_unprocessed_outcome_dates(
         return_field: "1d" or "5d"
         lookback_days: How far back to search
         min_age_days: Minimum age before expecting outcomes
+        strategy_modes: Filter by these strategy modes (e.g. ["conservative", "aggressive"])
 
     Returns:
         Sorted list of batch_date strings needing outcome processing
@@ -122,13 +124,16 @@ def get_unprocessed_outcome_dates(
         cutoff_recent = (today - timedelta(days=min_age_days)).isoformat()
         cutoff_old = (today - timedelta(days=lookback_days)).isoformat()
 
-        result = supabase._client.table("judgment_records").select(
+        query = supabase._client.table("judgment_records").select(
             "id, batch_date, judgment_outcomes(actual_return_1d, actual_return_5d)"
         ).gte(
             "batch_date", cutoff_old
         ).lte(
             "batch_date", cutoff_recent
-        ).execute()
+        )
+        if strategy_modes:
+            query = query.in_("strategy_mode", strategy_modes)
+        result = query.execute()
 
         rows = result.data or []
         return_col = f"actual_return_{return_field}"
@@ -159,19 +164,22 @@ def check_batch_gap(supabase, market_type: str = "us") -> int | None:
 
     Args:
         supabase: Supabase client
-        market_type: "us" or "jp" (used in log messages only)
+        market_type: "us" or "jp" — filters by metadata->>market
 
     Returns:
         Number of days since last successful batch, or None if no history
     """
     try:
-        result = supabase._client.table("batch_execution_logs").select(
+        query = supabase._client.table("batch_execution_logs").select(
             "started_at, status"
         ).eq(
             "batch_type", "evening_review"
         ).in_(
             "status", ["success", "partial_success"]
-        ).order(
+        )
+        # Filter by market metadata (set by review scripts since 2026-02-11)
+        query = query.eq("metadata->>market", market_type)
+        result = query.order(
             "started_at", desc=True
         ).limit(1).execute()
 

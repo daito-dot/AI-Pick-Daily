@@ -35,7 +35,7 @@ MDD_WARNING_THRESHOLD = -10.0  # Reduce position size by 50%
 MDD_STOP_NEW_THRESHOLD = -15.0  # Stop opening new positions
 MDD_CRITICAL_THRESHOLD = -50.0  # Consider closing all positions (was -20, relaxed to allow recovery)
 
-ExitReason = Literal["score_drop", "stop_loss", "take_profit", "max_hold", "regime_change"]
+ExitReason = Literal["score_drop", "stop_loss", "take_profit", "max_hold", "absolute_max_hold", "regime_change"]
 
 
 def calculate_transaction_cost(
@@ -839,11 +839,12 @@ class PortfolioManager:
         for signal in exit_signals:
             position = signal.position
 
-            # Calculate P&L with exit transaction cost
+            # Calculate P&L with both entry and exit transaction costs
             gross_pnl = (signal.current_price - position.entry_price) * position.shares
             exit_value = signal.current_price * position.shares
+            entry_cost = calculate_transaction_cost(position.position_value, self._txn_costs)
             exit_cost = calculate_transaction_cost(exit_value, self._txn_costs)
-            pnl = gross_pnl - exit_cost
+            pnl = gross_pnl - entry_cost - exit_cost
             pnl_pct = (pnl / position.position_value) * 100 if position.position_value else signal.pnl_pct
 
             try:
@@ -993,7 +994,7 @@ class PortfolioManager:
                     s.get("daily_pnl_pct", 0) for s in reversed(historical)
                     if s.get("daily_pnl_pct") is not None
                 ]
-                if daily_pnl_pct:
+                if daily_pnl_pct is not None:
                     daily_returns.append(daily_pnl_pct)
 
                 # Calculate max drawdown

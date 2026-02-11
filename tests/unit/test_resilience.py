@@ -233,7 +233,8 @@ class TestCheckBatchGap:
     def test_no_history_returns_none(self):
         """Returns None when no batch history exists."""
         supabase = MagicMock()
-        supabase._client.table.return_value.select.return_value.eq.return_value.in_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+        # Chain: table.select.eq(batch_type).in_(status).eq(metadata->>market).order.limit.execute
+        supabase._client.table.return_value.select.return_value.eq.return_value.in_.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = []
 
         result = check_batch_gap(supabase, market_type="us")
         assert result is None
@@ -242,7 +243,7 @@ class TestCheckBatchGap:
         """Detects multi-day gap from last successful run."""
         supabase = MagicMock()
         three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        supabase._client.table.return_value.select.return_value.eq.return_value.in_.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        supabase._client.table.return_value.select.return_value.eq.return_value.in_.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
             {"started_at": three_days_ago, "status": "success"},
         ]
 
@@ -253,7 +254,7 @@ class TestCheckBatchGap:
         """Returns 0-1 when last run was recent."""
         supabase = MagicMock()
         today = datetime.now(timezone.utc).isoformat()
-        supabase._client.table.return_value.select.return_value.eq.return_value.in_.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        supabase._client.table.return_value.select.return_value.eq.return_value.in_.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
             {"started_at": today, "status": "success"},
         ]
 

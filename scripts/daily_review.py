@@ -225,6 +225,7 @@ def main():
 
     # Start batch logging
     batch_ctx = BatchLogger.start(BatchType.EVENING_REVIEW)
+    batch_ctx.metadata["market"] = "us"
 
     # Initialize clients
     try:
@@ -248,14 +249,16 @@ def main():
 
         MAX_BACKFILL_DATES = 2  # Limit per run to avoid timeout; idempotent, catches up over runs
 
-        unprocessed_5d = get_unprocessed_outcome_dates(supabase, return_field="5d")
+        us_strategies = ["conservative", "aggressive"]
+
+        unprocessed_5d = get_unprocessed_outcome_dates(supabase, return_field="5d", strategy_modes=us_strategies)
         for missed_date in unprocessed_5d[:MAX_BACKFILL_DATES]:
             days_ago = (today_date - datetime.strptime(missed_date, "%Y-%m-%d").date()).days
             logger.info(f"Backfilling 5d outcomes for {missed_date} (days_ago={days_ago})")
             backfill_results = calculate_all_returns(finnhub, yf_client, supabase, days_ago=days_ago, return_field="5d")
             populate_judgment_outcomes(supabase, backfill_results, return_field="5d")
 
-        unprocessed_1d = get_unprocessed_outcome_dates(supabase, return_field="1d", min_age_days=1)
+        unprocessed_1d = get_unprocessed_outcome_dates(supabase, return_field="1d", min_age_days=1, strategy_modes=us_strategies)
         for missed_date in unprocessed_1d[:MAX_BACKFILL_DATES]:
             days_ago = (today_date - datetime.strptime(missed_date, "%Y-%m-%d").date()).days
             logger.info(f"Backfilling 1d outcomes for {missed_date} (days_ago={days_ago})")
