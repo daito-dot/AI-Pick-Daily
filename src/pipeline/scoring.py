@@ -316,7 +316,7 @@ def _run_strategy_ensemble(
         regime_params=regime_params,
     )
 
-    # 4. Save records (primary + all models)
+    # 4. Save records (primary + all shadow models)
     if supabase:
         save_risk_assessment_records(
             supabase=supabase,
@@ -328,6 +328,17 @@ def _run_strategy_ensemble(
             model_version=judgment_service.model_name,
             is_primary=True,
         )
+        for shadow_model_id, shadow_risk_output in shadow_risks.items():
+            save_risk_assessment_records(
+                supabase=supabase,
+                ensemble_results=ensemble_results,
+                risk_output=shadow_risk_output,
+                strategy_mode=strategy_mode,
+                market_regime=market_regime_str,
+                batch_date=today,
+                model_version=shadow_model_id,
+                is_primary=False,
+            )
 
     # 5. Extract buy picks
     picks = [
