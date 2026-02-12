@@ -1661,3 +1661,66 @@ export async function getModelPerformanceStats(
     return [];
   }
 }
+
+// ============================================
+// Model Outputs Page Functions
+// ============================================
+
+/**
+ * Get available batch dates that have judgment records.
+ */
+export async function getAvailableDates(
+  marketType: MarketType = 'us'
+): Promise<string[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select('batch_date')
+      .in('strategy_mode', strategies)
+      .eq('is_primary', true)
+      .gte('batch_date', getUTCDateDaysAgo(60))
+      .order('batch_date', { ascending: false });
+
+    if (error || !data) return [];
+
+    // Deduplicate
+    const unique = Array.from(new Set(data.map((d: { batch_date: string }) => d.batch_date)));
+    return unique;
+  } catch (error) {
+    console.error('getAvailableDates error:', error);
+    return [];
+  }
+}
+
+/**
+ * Get all model outputs (primary + shadow) for a specific date.
+ */
+export async function getModelOutputs(
+  date: string,
+  marketType: MarketType = 'us'
+): Promise<JudgmentRecord[]> {
+  try {
+    const supabase = getSupabase();
+    const strategies = Object.values(STRATEGY_MODES[marketType]);
+
+    const { data, error } = await supabase
+      .from('judgment_records')
+      .select('*')
+      .eq('batch_date', date)
+      .in('strategy_mode', strategies)
+      .order('symbol', { ascending: true });
+
+    if (error) {
+      console.error('[getModelOutputs] error:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('getModelOutputs error:', error);
+    return [];
+  }
+}

@@ -161,6 +161,7 @@ export interface JudgmentRecord {
   raw_llm_response: string | null;
   judged_at: string;
   created_at: string;
+  is_primary?: boolean;
 }
 
 export interface JudgmentOutcome {

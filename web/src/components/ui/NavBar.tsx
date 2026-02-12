@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/analytics', label: 'Analytics' },
   { href: '/insights', label: 'Insights' },
+  { href: '/models', label: 'Models' },
 ];
 
 interface NavBarProps {
