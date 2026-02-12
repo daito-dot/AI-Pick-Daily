@@ -36,16 +36,16 @@ def retry_on_error(max_retries: int = 3, base_sleep: float = 2.0):
                 try:
                     return func(*args, **kwargs)
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429 and attempt < max_retries - 1:
+                    if e.response.status_code in (429, 502, 503) and attempt < max_retries - 1:
                         sleep_time = base_sleep * (2 ** attempt)
-                        logger.warning(f"Rate limited. Retrying in {sleep_time}s...")
+                        logger.warning(f"HTTP {e.response.status_code}. Retrying in {sleep_time}s...")
                         time.sleep(sleep_time)
                     else:
                         raise
-                except httpx.ConnectError:
+                except (httpx.ConnectError, httpx.ReadTimeout, httpx.TimeoutException):
                     if attempt < max_retries - 1:
                         sleep_time = base_sleep * (2 ** attempt)
-                        logger.warning(f"Connection failed. Retrying in {sleep_time}s...")
+                        logger.warning(f"Connection/timeout error. Retrying in {sleep_time}s...")
                         time.sleep(sleep_time)
                     else:
                         raise
@@ -108,7 +108,13 @@ class OpenAIClient(LLMClient):
         response.raise_for_status()
         data = response.json()
 
-        content = data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"] or ""
+        finish_reason = data["choices"][0].get("finish_reason", "")
+        if finish_reason == "length":
+            logger.warning(
+                f"Response truncated (finish_reason=length, max_tokens={max_tokens}). "
+                f"Model: {model_name}"
+            )
         usage_data = data.get("usage")
         usage = None
         if usage_data:
@@ -194,7 +200,15 @@ class OpenAIClient(LLMClient):
         response.raise_for_status()
         data = response.json()
 
-        content = data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"] or ""
+
+        # Warn if response was truncated by max_tokens
+        finish_reason = data["choices"][0].get("finish_reason", "")
+        if finish_reason == "length":
+            logger.warning(
+                f"Response truncated (finish_reason=length, max_tokens={params['max_tokens']}). "
+                f"Model: {model_name}"
+            )
 
         # Strip native <think> blocks (DeepSeek-R1, QwQ, etc.)
         content = self._strip_think_tags(content)
@@ -217,6 +231,14 @@ class OpenAIClient(LLMClient):
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
-        """Remove <think>...</think> blocks from model output."""
+        """Remove <think>...</think> blocks from model output.
+
+        If stripping removes ALL content (e.g. DeepSeek-R1 wrapping entire
+        response in think tags), fall back to the original text.
+        """
         import re
-        return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+        stripped = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+        if not stripped and text.strip():
+            logger.warning("_strip_think_tags removed all content, returning original")
+            return text.strip()
+        return stripped

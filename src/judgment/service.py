@@ -587,15 +587,24 @@ class JudgmentService:
         if "```json" in cleaned:
             start = cleaned.find("```json") + 7
             end = cleaned.find("```", start)
-            cleaned = cleaned[start:end].strip()
+            cleaned = cleaned[start:] if end == -1 else cleaned[start:end]
+            cleaned = cleaned.strip()
         elif "```" in cleaned:
             start = cleaned.find("```") + 3
             end = cleaned.find("```", start)
-            cleaned = cleaned[start:end].strip()
+            cleaned = cleaned[start:] if end == -1 else cleaned[start:end]
+            cleaned = cleaned.strip()
+
+        if not cleaned:
+            raise ValueError("Empty response from LLM (nothing to parse)")
 
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError as e:
+            logger.error(
+                f"JSON parse failed: {e}\n"
+                f"Raw response ({len(response)} chars): {response[:500]}"
+            )
             raise ValueError(f"Invalid JSON in risk assessment response: {e}")
 
         assessments = []
