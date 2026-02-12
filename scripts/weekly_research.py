@@ -12,7 +12,7 @@ Recommended to run every weekend (Saturday/Sunday).
 """
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add src to path
@@ -23,27 +23,18 @@ from src.data.yfinance_client import get_yfinance_client
 from src.data.supabase_client import SupabaseClient
 from src.research import DeepResearchService
 from src.batch_logger import BatchLogger, BatchType
+from src.logging_config import setup_logging, get_logger
 
-# Setup logging
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
-
-logging.basicConfig(
-    level=logging.DEBUG if config.debug else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(log_dir / f"research_{datetime.now().strftime('%Y%m%d')}.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
+# Setup logging (uses shared config — consistent format across all scripts)
+setup_logging()
+logger = get_logger(__name__)
 
 
 def main():
     """Run weekly research analysis."""
     logger.info("=" * 50)
     logger.info("Starting weekly deep research")
-    logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
+    logger.info(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
     logger.info("=" * 50)
 
     # Start batch logging
@@ -146,7 +137,7 @@ def _save_research_to_db(report) -> None:
     """Save weekly research insights to research_logs for judgment injection."""
     try:
         supabase = SupabaseClient()
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Build a concise summary for judgment prompt consumption
         summary_parts = []

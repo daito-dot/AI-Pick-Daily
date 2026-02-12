@@ -9,7 +9,7 @@ Determines the current market environment:
 Based on VIX, S&P 500 deviation, and volatility clustering.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
@@ -251,7 +251,7 @@ def decide_market_regime(
         max_picks=REGIME_MAX_PICKS[regime],
         weight_adjustments=weight_adjustments,
         notes="\n".join(notes),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 

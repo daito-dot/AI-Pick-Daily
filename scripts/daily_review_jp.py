@@ -38,20 +38,11 @@ from src.pipeline.review import (
 )
 from src.portfolio import PortfolioManager
 from src.batch_logger import BatchLogger, BatchType
+from src.logging_config import setup_logging, get_logger
 
-# Setup logging
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
-
-logging.basicConfig(
-    level=logging.DEBUG if config.debug else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(log_dir / f"review_jp_{datetime.now().strftime('%Y%m%d')}.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
+# Setup logging (uses shared config — consistent format with US scripts)
+setup_logging()
+logger = get_logger(__name__)
 
 
 def main():

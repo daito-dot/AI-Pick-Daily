@@ -7,7 +7,7 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Generator
 from uuid import uuid4
@@ -82,7 +82,7 @@ class BatchExecutionContext:
                 "item_id": item_id,
                 "error": error,
                 "details": details,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
     def set_total(self, total: int) -> None:
@@ -145,7 +145,7 @@ class BatchLogger:
         if isinstance(batch_type, str):
             batch_type = BatchType(batch_type)
 
-        batch_date = batch_date or datetime.utcnow().strftime("%Y-%m-%d")
+        batch_date = batch_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         execution_id = str(uuid4())
 
         ctx = BatchExecutionContext(
@@ -178,7 +178,7 @@ class BatchLogger:
         if error:
             ctx.errors.append({
                 "error": error,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             BatchLogger._update_log(ctx, ExecutionStatus.FAILED, error)
         else:
@@ -216,7 +216,7 @@ class BatchLogger:
         if isinstance(batch_type, str):
             batch_type = BatchType(batch_type)
 
-        batch_date = batch_date or datetime.utcnow().strftime("%Y-%m-%d")
+        batch_date = batch_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         execution_id = str(uuid4())
 
         ctx = BatchExecutionContext(
@@ -254,7 +254,7 @@ class BatchLogger:
             ctx.errors.append({
                 "error": str(e),
                 "type": type(e).__name__,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             BatchLogger._update_log(ctx, ExecutionStatus.FAILED, str(e))
             raise
@@ -270,7 +270,7 @@ class BatchLogger:
             supabase.table("batch_execution_logs").update({
                 "status": ExecutionStatus.FAILED.value,
                 "error_message": "Replaced by new run (previous run did not complete)",
-                "completed_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq(
                 "batch_date", ctx.batch_date
             ).eq(
@@ -285,7 +285,7 @@ class BatchLogger:
                 "batch_date": ctx.batch_date,
                 "batch_type": ctx.batch_type.value,
                 "status": status.value,
-                "started_at": datetime.utcnow().isoformat(),
+                "started_at": datetime.now(timezone.utc).isoformat(),
                 "model_used": ctx.model_used,
                 "metadata": ctx.metadata,
             }
@@ -309,7 +309,7 @@ class BatchLogger:
 
             update_data = {
                 "status": status.value,
-                "completed_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
                 "duration_seconds": ctx.duration_seconds,
                 "total_items": ctx.total_items,
                 "successful_items": ctx.successful_items,
@@ -340,7 +340,7 @@ class BatchLogger:
         """Get today's batch execution status."""
         try:
             supabase = _get_supabase_client()
-            today = datetime.utcnow().strftime("%Y-%m-%d")
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
             result = supabase.rpc(
                 "get_latest_batch_status",

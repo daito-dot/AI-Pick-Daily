@@ -41,6 +41,7 @@ from src.batch_logger import BatchLogger, BatchType
 from src.symbols.jp_stocks import JP_STOCK_SYMBOLS, get_jp_stock_name
 from src.monitoring import BatchMetrics, record_batch_metrics, check_and_alert, send_alert, AlertLevel
 from src.pipeline import JP_MARKET, load_dynamic_thresholds, load_factor_weights, run_llm_judgment_phase, open_positions_and_snapshot
+from src.logging_config import setup_logging, get_logger
 
 
 class DataFetchError(Exception):
@@ -48,19 +49,9 @@ class DataFetchError(Exception):
     pass
 
 
-# Setup logging
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
-
-logging.basicConfig(
-    level=logging.DEBUG if config.debug else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(log_dir / f"scoring_jp_{datetime.now().strftime('%Y%m%d')}.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
+# Setup logging (uses shared config — consistent format with US scripts)
+setup_logging()
+logger = get_logger(__name__)
 
 
 def fetch_market_regime_data_jp(yf_client: YFinanceClient) -> dict:

@@ -9,7 +9,7 @@ interface QuickPortfolioSummaryProps {
 
 export function QuickPortfolioSummary({ v1Summary, v2Summary, isJapan }: QuickPortfolioSummaryProps) {
   const totalValue = v1Summary.totalValue + v2Summary.totalValue;
-  const initialFund = isJapan ? 200000 : 200000;
+  const initialFund = 100000;  // Matches INITIAL_CAPITAL in portfolio/manager.py
   const totalPnlPct = ((totalValue - initialFund) / initialFund) * 100;
   const avgAlpha = (v1Summary.alpha + v2Summary.alpha) / 2;
   const worstDrawdown = Math.min(

@@ -44,8 +44,8 @@ def load_dynamic_thresholds(
     try:
         v1_config = supabase.get_scoring_config(market_config.v1_strategy_mode)
         v2_config = supabase.get_scoring_config(market_config.v2_strategy_mode)
-        v1_threshold = int(float(v1_config.get("threshold", 60))) if v1_config else None
-        v2_threshold = int(float(v2_config.get("threshold", 45))) if v2_config else None
+        v1_threshold = int(float(v1_config.get("threshold", config.strategy.v1_min_score))) if v1_config else None
+        v2_threshold = int(float(v2_config.get("threshold", config.strategy.v2_min_score))) if v2_config else None
         logger.info(f"Dynamic thresholds: V1={v1_threshold}, V2={v2_threshold}")
         return v1_threshold, v2_threshold
     except Exception as e:

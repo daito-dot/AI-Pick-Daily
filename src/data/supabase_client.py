@@ -9,7 +9,7 @@ Handles all database operations:
 """
 import logging
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from supabase import create_client, Client
@@ -473,7 +473,7 @@ class SupabaseClient:
             Updated record
         """
         update_data: dict[str, Any] = {
-            "reviewed_at": datetime.utcnow().isoformat(),
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
         }
 
         if return_1d is not None:
@@ -676,9 +676,9 @@ class SupabaseClient:
         """
         result = self._client.table("scoring_config").update({
             "threshold": new_threshold,
-            "last_adjustment_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "last_adjustment_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "last_adjustment_reason": reason,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq(
             "strategy_mode", strategy_mode
         ).execute()
@@ -717,7 +717,7 @@ class SupabaseClient:
             "strategy_mode": strategy_mode,
             "old_threshold": old_threshold,
             "new_threshold": new_threshold,
-            "adjustment_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "adjustment_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "reason": reason,
         }
 
@@ -848,7 +848,7 @@ class SupabaseClient:
             "exit_reason": exit_reason,
             "realized_pnl": realized_pnl,
             "realized_pnl_pct": realized_pnl_pct,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq(
             "id", position_id
         ).execute()
@@ -1571,7 +1571,7 @@ class SupabaseClient:
         """
         result = self._client.table("stock_universe").update({
             "enabled": enabled,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq(
             "symbol", symbol
         ).eq(

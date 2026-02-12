@@ -8,7 +8,7 @@ Handles:
 - Final pick selection
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 from scipy import stats
@@ -102,7 +102,7 @@ def calculate_composite_score(
             "sentiment": sentiment_score,
         },
         weights_used=weights,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -208,5 +208,5 @@ def run_full_scoring(
         scores=scores,
         market_regime=market_regime,
         top_picks=top_picks,
-        cutoff_timestamp=datetime.utcnow(),
+        cutoff_timestamp=datetime.now(timezone.utc),
     )

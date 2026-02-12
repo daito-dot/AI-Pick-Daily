@@ -27,6 +27,9 @@ class MarketConfig:
     min_stocks_required: int = 10
     initial_capital: float = 100000.0
     rate_limit_sleep: float = 0.3
+    # Fallback thresholds — used only when LLM judgment is unavailable.
+    # Intentionally stricter than scoring pipeline's v2_min_score (45) because
+    # without LLM validation, rule-based filtering must be more conservative.
     default_v1_threshold: int = 60
     default_v2_threshold: int = 75
 
