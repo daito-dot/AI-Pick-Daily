@@ -63,12 +63,25 @@ export function JudgmentDetailModal({
     judgment.decision === 'buy' ? 'green' :
     judgment.decision === 'hold' ? 'yellow' : 'red';
 
+  // v1/v2 CoT format
   const hasDecisionPoint = !!reasoning?.decision_point;
   const hasTopFactors = Array.isArray(reasoning?.top_factors) && reasoning.top_factors.length > 0;
   const hasUncertainties = Array.isArray(reasoning?.uncertainties) && reasoning.uncertainties.length > 0;
   const hasSteps = Array.isArray(reasoning?.steps) && reasoning.steps.length > 0;
   const hasConfidenceExplanation = !!reasoning?.confidence_explanation;
-  const hasAnyReasoningContent = hasDecisionPoint || hasTopFactors || hasUncertainties || hasSteps || hasConfidenceExplanation;
+  const hasV1Content = hasDecisionPoint || hasTopFactors || hasUncertainties || hasSteps || hasConfidenceExplanation;
+
+  // v3 risk ensemble format
+  const v3 = reasoning as unknown as Record<string, unknown> | null;
+  const v3RiskScore = typeof v3?.risk_score === 'number' ? v3.risk_score : null;
+  const v3DecisionReason = typeof v3?.decision_reason === 'string' ? v3.decision_reason : '';
+  const v3NewsInterp = typeof v3?.news_interpretation === 'string' && !v3.news_interpretation.startsWith('Fallback:') ? v3.news_interpretation as string : '';
+  const v3MarketRisks = typeof v3?.market_level_risks === 'string' && !v3.market_level_risks.startsWith('Risk assessment unavailable') ? v3.market_level_risks as string : '';
+  const v3Catalysts = Array.isArray(v3?.negative_catalysts) ? v3.negative_catalysts as string[] : [];
+  const v3ConsensusRatio = typeof v3?.consensus_ratio === 'number' ? v3.consensus_ratio : null;
+  const v3RiskScoresByModel = v3?.risk_scores_by_model as Record<string, number> | undefined;
+  const isV3 = v3RiskScore !== null;
+  const hasAnyReasoningContent = hasV1Content || isV3;
 
   return (
     <div
@@ -202,6 +215,89 @@ export function JudgmentDetailModal({
             <h3 className="text-sm font-semibold text-gray-700 mb-3 pb-2 border-b">推論プロセス</h3>
             {hasAnyReasoningContent ? (
               <div className="space-y-3">
+                {/* v3 risk ensemble format */}
+                {isV3 && (
+                  <>
+                    {/* Risk metrics row */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                        <p className="text-xs text-gray-500 mb-1">リスクスコア</p>
+                        <p className={`text-xl font-bold ${
+                          v3RiskScore! <= 2 ? 'text-green-600' :
+                          v3RiskScore! <= 3 ? 'text-yellow-600' :
+                          'text-red-600'
+                        }`}>{v3RiskScore!.toFixed(1)}</p>
+                      </div>
+                      {v3ConsensusRatio !== null && (
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                          <p className="text-xs text-gray-500 mb-1">コンセンサス</p>
+                          <p className="text-xl font-bold text-gray-800">{(v3ConsensusRatio * 100).toFixed(0)}%</p>
+                        </div>
+                      )}
+                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                        <p className="text-xs text-gray-500 mb-1">モデル数</p>
+                        <p className="text-xl font-bold text-gray-800">
+                          {v3RiskScoresByModel ? Object.keys(v3RiskScoresByModel).length : '-'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Decision reason */}
+                    {v3DecisionReason && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <h4 className="text-xs font-semibold text-blue-800 mb-1">判断理由</h4>
+                        <p className="text-sm text-blue-700">{v3DecisionReason}</p>
+                      </div>
+                    )}
+
+                    {/* News interpretation */}
+                    {v3NewsInterp && (
+                      <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+                        <h4 className="text-xs font-semibold text-indigo-800 mb-1">ニュース解釈</h4>
+                        <p className="text-sm text-indigo-700">{v3NewsInterp}</p>
+                      </div>
+                    )}
+
+                    {/* Negative catalysts */}
+                    {v3Catalysts.length > 0 && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                        <h4 className="text-xs font-semibold text-red-800 mb-1">ネガティブカタリスト</h4>
+                        <ul className="list-disc list-inside text-sm text-red-700 space-y-0.5">
+                          {v3Catalysts.map((c, i) => <li key={i}>{c}</li>)}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Market risks */}
+                    {v3MarketRisks && (
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                        <h4 className="text-xs font-semibold text-orange-800 mb-1">マーケットリスク</h4>
+                        <p className="text-sm text-orange-700">{v3MarketRisks}</p>
+                      </div>
+                    )}
+
+                    {/* Per-model risk scores */}
+                    {v3RiskScoresByModel && Object.keys(v3RiskScoresByModel).length > 0 && (
+                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                        <h4 className="text-xs font-semibold text-gray-800 mb-2">モデル別リスクスコア</h4>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {Object.entries(v3RiskScoresByModel).map(([model, score]) => (
+                            <div key={model} className="flex items-center justify-between text-xs px-2 py-1 bg-white rounded">
+                              <span className="text-gray-600 truncate mr-2">{model}</span>
+                              <span className={`font-bold ${
+                                score <= 2 ? 'text-green-600' :
+                                score <= 3 ? 'text-yellow-600' :
+                                'text-red-600'
+                              }`}>{score}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* v1/v2 CoT format */}
                 {hasDecisionPoint && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                     <h4 className="text-xs font-semibold text-blue-800 mb-1">決定ポイント</h4>

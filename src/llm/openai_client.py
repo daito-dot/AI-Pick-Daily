@@ -136,7 +136,7 @@ class OpenAIClient(LLMClient):
         "minimal": {"temperature": 0.7, "max_tokens": 4096, "system": ""},
         "low": {
             "temperature": 0.5,
-            "max_tokens": 8192,
+            "max_tokens": 16384,
             "system": (
                 "Think through this step-by-step before giving your final answer. "
                 "Show your reasoning process, then provide the final output.\n\n"
