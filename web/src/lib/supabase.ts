@@ -336,8 +336,9 @@ export async function getPerformanceStats(marketType: MarketType = 'us'): Promis
 
     const { data, error } = await supabase
       .from('judgment_outcomes')
-      .select('outcome_aligned, actual_return_5d, judgment_records!inner(decision, strategy_mode)')
+      .select('outcome_aligned, actual_return_5d, judgment_records!inner(decision, strategy_mode, is_primary)')
       .in('judgment_records.strategy_mode', [modes.conservative, modes.aggressive])
+      .eq('judgment_records.is_primary', true)
       .gte('outcome_date', getUTCDateDaysAgo(30));
 
     if (error || !data || data.length < 5) {
@@ -758,12 +759,13 @@ export async function getTodayJudgments(marketType: MarketType = 'us'): Promise<
     // First try today's date, then fallback to most recent
     let targetDate = today;
 
-    // Check if today's judgments exist
+    // Check if today's judgments exist (primary only)
     const { data: todayCheck } = await supabase
       .from('judgment_records')
       .select('batch_date')
       .eq('batch_date', today)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
+      .eq('is_primary', true)
       .limit(1);
 
     // If no data for today, get the most recent date
@@ -772,6 +774,7 @@ export async function getTodayJudgments(marketType: MarketType = 'us'): Promise<
         .from('judgment_records')
         .select('batch_date')
         .in('strategy_mode', [modes.conservative, modes.aggressive])
+        .eq('is_primary', true)
         .order('batch_date', { ascending: false })
         .limit(1);
 
@@ -785,6 +788,7 @@ export async function getTodayJudgments(marketType: MarketType = 'us'): Promise<
       .select('*')
       .eq('batch_date', targetDate)
       .in('strategy_mode', [modes.conservative, modes.aggressive])
+      .eq('is_primary', true)
       .order('confidence', { ascending: false });
 
     if (error) {
@@ -810,6 +814,7 @@ export async function getJudgmentsForDate(date: string): Promise<JudgmentRecord[
       .from('judgment_records')
       .select('*')
       .eq('batch_date', date)
+      .eq('is_primary', true)
       .order('confidence', { ascending: false });
 
     if (error) {
@@ -840,7 +845,8 @@ export async function getJudgmentBySymbol(
       .from('judgment_records')
       .select('*')
       .eq('symbol', symbol)
-      .eq('batch_date', targetDate);
+      .eq('batch_date', targetDate)
+      .eq('is_primary', true);
 
     if (strategyMode) {
       query = query.eq('strategy_mode', strategyMode);
@@ -871,6 +877,7 @@ export async function getJudgmentHistory(days: number = 30): Promise<JudgmentRec
       .from('judgment_records')
       .select('*')
       .gte('batch_date', getUTCDateDaysAgo(days))
+      .eq('is_primary', true)
       .order('batch_date', { ascending: false })
       .order('confidence', { ascending: false });
 
@@ -903,7 +910,8 @@ export async function getJudgmentStats(days: number = 30): Promise<{
     const { data, error } = await supabase
       .from('judgment_records')
       .select('decision, confidence')
-      .gte('batch_date', getUTCDateDaysAgo(days));
+      .gte('batch_date', getUTCDateDaysAgo(days))
+      .eq('is_primary', true);
 
     if (error || !data) {
       return {

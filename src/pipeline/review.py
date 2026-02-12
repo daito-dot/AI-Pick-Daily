@@ -584,10 +584,14 @@ def build_performance_stats(supabase, strategy_mode: str, days: int = 30) -> dic
         cutoff = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
         rows = supabase._client.table("judgment_outcomes").select(
             "actual_return_5d, outcome_aligned, "
-            "judgment_records!inner(symbol, strategy_mode, decision, batch_date)"
+            "judgment_records!inner(symbol, strategy_mode, decision, batch_date, is_primary)"
         ).gte("outcome_date", cutoff).execute().data or []
 
-        rows = [r for r in rows if r.get("judgment_records", {}).get("strategy_mode") == strategy_mode]
+        rows = [
+            r for r in rows
+            if r.get("judgment_records", {}).get("strategy_mode") == strategy_mode
+            and r.get("judgment_records", {}).get("is_primary") is not False
+        ]
 
         if len(rows) < 5:
             return {}
@@ -630,12 +634,13 @@ def build_recent_mistakes(supabase, strategy_mode: str, days: int = 3) -> list[d
         cutoff = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
         rows = supabase._client.table("judgment_outcomes").select(
             "actual_return_1d, "
-            "judgment_records!inner(symbol, strategy_mode, decision, batch_date, confidence, reasoning)"
+            "judgment_records!inner(symbol, strategy_mode, decision, batch_date, confidence, reasoning, is_primary)"
         ).gte("outcome_date", cutoff).not_.is_("actual_return_1d", "null").execute().data or []
 
         rows = [
             r for r in rows
             if r.get("judgment_records", {}).get("strategy_mode") == strategy_mode
+            and r.get("judgment_records", {}).get("is_primary") is not False
             and r["judgment_records"]["decision"] == "buy"
             and r.get("actual_return_1d") is not None
             and r["actual_return_1d"] < -2.0

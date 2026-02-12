@@ -1232,6 +1232,7 @@ class SupabaseClient:
         strategy_mode: str | None = None,
         decision: str | None = None,
         min_confidence: float | None = None,
+        is_primary: bool | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """
@@ -1243,6 +1244,7 @@ class SupabaseClient:
             strategy_mode: Optional strategy filter
             decision: Optional decision filter
             min_confidence: Optional minimum confidence filter
+            is_primary: Optional filter for primary (True) or shadow (False) models
             limit: Maximum records to return
 
         Returns:
@@ -1260,6 +1262,8 @@ class SupabaseClient:
             query = query.eq("decision", decision)
         if min_confidence is not None:
             query = query.gte("confidence", min_confidence)
+        if is_primary is not None:
+            query = query.eq("is_primary", is_primary)
 
         result = query.order("batch_date", desc=True).limit(limit).execute()
         return result.data or []
