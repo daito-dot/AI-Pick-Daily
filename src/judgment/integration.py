@@ -774,12 +774,11 @@ def save_risk_assessment_records(
 ) -> None:
     """Save ensemble risk assessment results as judgment records.
 
-    Maps ensemble results to the existing judgment_records schema:
-    - decision: ensemble final_decision ("buy" / "skip")
-    - confidence: (5 - avg_risk_score) / 4, clamped [0, 1]
-    - score: composite_score from rule-based scoring
-    - reasoning: JSON with risk details + ensemble info
-    - identified_risks: negative_catalysts from risk assessment
+    For primary model: saves ensemble-aggregated decision/confidence
+    (this is the actual trading decision).
+
+    For shadow models: saves the model's own individual decision/confidence
+    derived from its own risk_score, enabling per-model performance comparison.
 
     Args:
         supabase: Supabase client
@@ -793,7 +792,7 @@ def save_risk_assessment_records(
     """
     market_type = "jp" if strategy_mode.startswith("jp_") else "us"
 
-    # Build lookup for risk assessments
+    # Build lookup for this model's individual risk assessments
     assessment_map = {a.symbol: a for a in risk_output.assessments}
 
     for er in ensemble_results:
@@ -801,16 +800,31 @@ def save_risk_assessment_records(
         negative_catalysts = assessment.negative_catalysts if assessment else []
         news_interp = assessment.news_interpretation if assessment else ""
 
-        # Map risk score to confidence: low risk → high confidence
-        confidence = max(0.0, min(1.0, (5 - er.avg_risk_score) / 4))
+        if is_primary:
+            # Primary: use ensemble-aggregated decision (actual trading signal)
+            decision = er.final_decision
+            individual_risk = er.avg_risk_score
+            confidence = max(0.0, min(1.0, (5 - er.avg_risk_score) / 4))
+            decision_reason = er.decision_reason
+            input_summary = f"Ensemble: R{er.avg_risk_score:.1f} C{er.consensus_ratio:.0%}"
+        else:
+            # Shadow: use this model's own risk score for independent evaluation
+            individual_risk = assessment.risk_score if assessment else 3
+            confidence = max(0.0, min(1.0, (5 - individual_risk) / 4))
+            decision = "buy" if individual_risk <= 3 else "skip"
+            decision_reason = (
+                f"Model {model_version}: risk={individual_risk}, "
+                f"decision={decision}"
+            )
+            input_summary = f"Individual: R{individual_risk}"
 
         reasoning_dict = {
-            "risk_score": er.avg_risk_score,
+            "risk_score": individual_risk,
             "risk_scores_by_model": er.risk_scores,
             "consensus_ratio": er.consensus_ratio,
             "negative_catalysts": negative_catalysts,
             "news_interpretation": news_interp,
-            "decision_reason": er.decision_reason,
+            "decision_reason": decision_reason,
             "market_level_risks": risk_output.market_level_risks,
         }
 
@@ -819,14 +833,14 @@ def save_risk_assessment_records(
                 symbol=er.symbol,
                 batch_date=batch_date,
                 strategy_mode=strategy_mode,
-                decision=er.final_decision,
+                decision=decision,
                 confidence=confidence,
                 score=er.composite_score,
                 reasoning=reasoning_dict,
                 key_factors=[],
                 identified_risks=negative_catalysts,
                 market_regime=market_regime,
-                input_summary=f"Ensemble: R{er.avg_risk_score:.1f} C{er.consensus_ratio:.0%}",
+                input_summary=input_summary,
                 model_version=model_version,
                 prompt_version="v3_risk_ensemble",
                 raw_llm_response=risk_output.raw_llm_response,
