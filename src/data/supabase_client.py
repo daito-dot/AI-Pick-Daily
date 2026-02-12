@@ -1081,8 +1081,8 @@ class SupabaseClient:
         daily_pnl_pct: float | None = None,
         cumulative_pnl: float | None = None,
         cumulative_pnl_pct: float | None = None,
-        sp500_daily_pct: float | None = None,
-        sp500_cumulative_pct: float | None = None,
+        benchmark_daily_pct: float | None = None,
+        benchmark_cumulative_pct: float | None = None,
         alpha: float | None = None,
         open_positions: int = 0,
         closed_today: int = 0,
@@ -1096,6 +1096,8 @@ class SupabaseClient:
 
         Args:
             strategy_mode: 'conservative', 'aggressive', 'jp_conservative', or 'jp_aggressive'
+            benchmark_daily_pct: Daily return of benchmark index (S&P500 for US, Nikkei 225 for JP)
+            benchmark_cumulative_pct: Cumulative return of benchmark index
             market_type: 'us' or 'jp' (auto-derived from strategy_mode if not provided)
 
         Returns:
@@ -1124,10 +1126,10 @@ class SupabaseClient:
             record["cumulative_pnl"] = cumulative_pnl
         if cumulative_pnl_pct is not None:
             record["cumulative_pnl_pct"] = round(cumulative_pnl_pct, 4)
-        if sp500_daily_pct is not None:
-            record["sp500_daily_pct"] = round(sp500_daily_pct, 4)
-        if sp500_cumulative_pct is not None:
-            record["sp500_cumulative_pct"] = round(sp500_cumulative_pct, 4)
+        if benchmark_daily_pct is not None:
+            record["sp500_daily_pct"] = round(benchmark_daily_pct, 4)
+        if benchmark_cumulative_pct is not None:
+            record["sp500_cumulative_pct"] = round(benchmark_cumulative_pct, 4)
         if alpha is not None:
             record["alpha"] = round(alpha, 4)
         if max_drawdown is not None:

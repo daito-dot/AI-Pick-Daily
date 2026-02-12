@@ -434,7 +434,7 @@ def open_positions_and_snapshot(
         try:
             portfolio.update_portfolio_snapshot(
                 strategy_mode=strategy,
-                sp500_daily_pct=benchmark_daily_pct,
+                benchmark_daily_pct=benchmark_daily_pct,
             )
         except Exception as e:
             logger.error(f"Failed to update snapshot for {strategy}: {e}")

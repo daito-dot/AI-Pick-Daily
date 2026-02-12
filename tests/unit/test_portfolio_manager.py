@@ -534,12 +534,12 @@ class TestPortfolioSnapshot:
         # sp500_daily_pct = 2%
         # prev_factor = 1.05, daily_factor = 1.02
         # new cumulative = (1.05 * 1.02 - 1) * 100 = 7.1%
-        result = manager.update_portfolio_snapshot("conservative", sp500_daily_pct=2.0)
+        result = manager.update_portfolio_snapshot("conservative", benchmark_daily_pct=2.0)
 
-        assert result["sp500_cumulative_pct"] == pytest.approx(7.1, abs=0.01)
+        assert result["benchmark_cumulative_pct"] == pytest.approx(7.1, abs=0.01)
 
     def test_sp500_cumulative_no_new_data(self):
-        """S&P 500 cumulative stays the same when no daily data provided."""
+        """Benchmark cumulative stays the same when no daily data provided."""
         prev = {
             "total_value": INITIAL_CAPITAL,
             "cumulative_pnl": 0,
@@ -549,9 +549,9 @@ class TestPortfolioSnapshot:
             positions=[],
             prev_snapshot=prev,
         )
-        result = manager.update_portfolio_snapshot("conservative", sp500_daily_pct=None)
+        result = manager.update_portfolio_snapshot("conservative", benchmark_daily_pct=None)
 
-        assert result["sp500_cumulative_pct"] == pytest.approx(5.0)
+        assert result["benchmark_cumulative_pct"] == pytest.approx(5.0)
 
     def test_alpha_calculation(self):
         """Alpha = cumulative_pnl_pct - sp500_cumulative_pct."""

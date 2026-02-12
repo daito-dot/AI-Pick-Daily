@@ -188,7 +188,8 @@ def fetch_stock_data_jp(
             pb_ratio = full_info.get("priceToBook")
             dividend_yield = full_info.get("dividendYield")
             market_cap = full_info.get("marketCap")
-        except:
+        except Exception as e:
+            logger.debug(f"{symbol}: Failed to get basic info: {e}")
             pe_ratio = None
             pb_ratio = None
             dividend_yield = None

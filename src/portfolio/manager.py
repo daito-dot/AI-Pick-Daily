@@ -124,7 +124,8 @@ class PortfolioManager:
                 self._params_cache[strategy_mode] = get_parameters(
                     self.supabase, strategy_mode
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to load strategy parameters for {strategy_mode}, using defaults: {e}")
                 self._params_cache[strategy_mode] = {
                     "take_profit_pct": TAKE_PROFIT_PCT,
                     "stop_loss_pct": STOP_LOSS_PCT,
@@ -894,7 +895,7 @@ class PortfolioManager:
         self,
         strategy_mode: str,
         closed_today: int = 0,
-        sp500_daily_pct: float | None = None,
+        benchmark_daily_pct: float | None = None,
     ) -> dict[str, Any]:
         """
         Update daily portfolio snapshot.
@@ -902,7 +903,7 @@ class PortfolioManager:
         Args:
             strategy_mode: 'conservative' or 'aggressive'
             closed_today: Number of positions closed today
-            sp500_daily_pct: S&P 500 daily return for benchmark
+            benchmark_daily_pct: Benchmark index daily return (S&P500 for US, Nikkei 225 for JP)
 
         Returns:
             Saved snapshot record
@@ -961,9 +962,9 @@ class PortfolioManager:
 
         # Calculate S&P 500 cumulative (compound) and alpha
         # Use multiplicative compounding to match portfolio's natural compounding
-        if sp500_daily_pct is not None:
+        if benchmark_daily_pct is not None:
             prev_factor = 1.0 + (prev_sp500_cumulative / 100.0)
-            daily_factor = 1.0 + (sp500_daily_pct / 100.0)
+            daily_factor = 1.0 + (benchmark_daily_pct / 100.0)
             sp500_cumulative_pct = (prev_factor * daily_factor - 1.0) * 100.0
         else:
             sp500_cumulative_pct = prev_sp500_cumulative
@@ -1024,8 +1025,8 @@ class PortfolioManager:
             daily_pnl_pct=daily_pnl_pct,
             cumulative_pnl=cumulative_pnl,
             cumulative_pnl_pct=cumulative_pnl_pct,
-            sp500_daily_pct=sp500_daily_pct,
-            sp500_cumulative_pct=sp500_cumulative_pct,
+            benchmark_daily_pct=benchmark_daily_pct,
+            benchmark_cumulative_pct=sp500_cumulative_pct,
             max_drawdown=max_drawdown,
             sharpe_ratio=sharpe_ratio,
             win_rate=win_rate,

@@ -242,7 +242,7 @@ def main():
             portfolio.update_portfolio_snapshot(
                 strategy_mode=strategy,
                 closed_today=closed_today,
-                sp500_daily_pct=nikkei_daily_pct,
+                benchmark_daily_pct=nikkei_daily_pct,
             )
         except Exception as e:
             logger.error(f"Failed to update snapshot for {strategy}: {e}")
