@@ -2,7 +2,11 @@
 -- Ensures ALL LLM-generated data records which model produced the output
 
 -- 1. research_logs: track which model generated research
-ALTER TABLE research_logs ADD COLUMN IF NOT EXISTS model_version VARCHAR(100);
+-- (safely skip if research_logs doesn't exist yet — will be created in 021)
+DO $$ BEGIN
+  ALTER TABLE research_logs ADD COLUMN IF NOT EXISTS model_version VARCHAR(100);
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
 
 -- 2. ai_lessons: track which model generated lessons
 ALTER TABLE ai_lessons ADD COLUMN IF NOT EXISTS model_version VARCHAR(100);
@@ -12,6 +16,9 @@ ALTER TABLE batch_execution_logs
   ADD COLUMN IF NOT EXISTS analysis_model VARCHAR(100),
   ADD COLUMN IF NOT EXISTS reflection_model VARCHAR(100);
 
--- 4. Index for model-based queries on research_logs
-CREATE INDEX IF NOT EXISTS idx_research_logs_model
-  ON research_logs(model_version) WHERE model_version IS NOT NULL;
+-- 4. Index for model-based queries on research_logs (skip if table missing)
+DO $$ BEGIN
+  CREATE INDEX IF NOT EXISTS idx_research_logs_model
+    ON research_logs(model_version) WHERE model_version IS NOT NULL;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
